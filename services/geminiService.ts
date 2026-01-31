@@ -2,10 +2,30 @@
 import { GoogleGenAI, Chat } from "@google/genai";
 import { Trade, GlobalNote, Playbook } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Initialize AI client only if API key exists
+const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+let ai: any = null;
+
+if (apiKey) {
+  ai = new GoogleGenAI({ apiKey });
+}
+
+// Helper function to check if AI is enabled
+export function isAIEnabled(): boolean {
+  return Boolean(apiKey && ai);
+}
+
+// Helper function to return error when AI is disabled
+function aiDisabledError(context: string): string {
+  return `El AI Coach está desactivado. ${context} requiere una API key de Gemini válida en el archivo .env.local (VITE_GEMINI_API_KEY).`;
+}
 
 // Función existente para análisis visual (One-shot)
 export async function getTradeAnalysis(trades: Trade[], goal: number) {
+  if (!isAIEnabled()) {
+    return aiDisabledError("El análisis de trades");
+  }
+
   const recentTrades = trades.slice(0, 5); 
   const totalProfit = trades.reduce((acc, t) => acc + t.profit, 0);
   
@@ -74,6 +94,10 @@ export async function getTradeAnalysis(trades: Trade[], goal: number) {
 }
 
 export async function getNotesAnalysis(notes: GlobalNote[]) {
+    if (!isAIEnabled()) {
+      return aiDisabledError("El análisis de notas");
+    }
+
     // Take the last 10 notes to fit context
     const recentNotes = notes.sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 10);
     
@@ -152,6 +176,10 @@ export async function getNotesAnalysis(notes: GlobalNote[]) {
 
 // Analizar Playbook PDF
 export async function analyzePlaybook(pdfBase64: string): Promise<string> {
+  if (!isAIEnabled()) {
+    return aiDisabledError("El análisis del Playbook");
+  }
+
   const parts: any[] = [];
   
   // Extraer solo la data base64 si viene con prefijo
@@ -191,6 +219,10 @@ export async function analyzePlaybook(pdfBase64: string): Promise<string> {
 }
 
 export async function getRecoverySuggestion(trades: Trade[], goal: number) {
+  if (!isAIEnabled()) {
+    return aiDisabledError("El consejo de recuperación");
+  }
+
   const totalProfit = trades.reduce((acc, t) => acc + t.profit, 0);
   const lastTrades = trades.slice(0, 3);
 
@@ -222,7 +254,12 @@ export async function getRecoverySuggestion(trades: Trade[], goal: number) {
 }
 
 // NUEVA FUNCIÓN: Inicializar Chat con Playbook opcional
-export function createTradingChatSession(trades: Trade[], goal: number, notes: GlobalNote[], playbook?: Playbook | null): Chat {
+export function createTradingChatSession(trades: Trade[], goal: number, notes: GlobalNote[], playbook?: Playbook | null): Chat | null {
+  if (!isAIEnabled()) {
+    console.warn("AI is not enabled. Chat session cannot be created.");
+    return null;
+  }
+
   const totalProfit = trades.reduce((acc, t) => acc + t.profit, 0);
   const recentHistory = trades.slice(0, 20).map(t => ({
       date: t.date,

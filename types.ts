@@ -67,6 +67,8 @@ export interface UserProfile {
   avatar?: string; // Base64 string
   tradingType: string; // Futuros, Opciones, Acciones, etc.
   tradingStyle: string; // Scalping, Day Trading, Swing, etc.
+  username?: string;
+  password?: string;
 }
 
 export interface TradingAccount {

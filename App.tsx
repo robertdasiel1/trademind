@@ -11,7 +11,9 @@ import {
   Sun, 
   Moon, 
   ChevronLeft, 
-  ChevronRight 
+  ChevronRight,
+  LogOut,
+  Unlock
 } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import TradeForm from './components/TradeForm';
@@ -21,6 +23,7 @@ import NotesView from './components/NotesView';
 import AICoach from './components/AICoach';
 import NotificationToast, { NotificationData } from './components/NotificationToast';
 import SettingsModal from './components/SettingsModal';
+import LoginScreen from './components/LoginScreen';
 import { Trade, TradingAccount, GlobalNote, ChatMessage, Playbook, UserProfile } from './types';
 import { Chat } from "@google/genai";
 
@@ -104,6 +107,9 @@ function App() {
     } catch { return []; }
   });
   
+  // AUTH STATE: ALWAYS FALSE INITIALLY to show login screen
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
   const chatSessionRef = useRef<Chat | null>(null);
 
   // UI State
@@ -152,6 +158,10 @@ function App() {
   // --- HANDLERS ---
   const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
   const changeTab = (tab: string) => setActiveTab(tab);
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+  };
 
   const handleAddTrade = (trade: Trade) => {
     const newTrade = { ...trade, accountId: activeAccountId };
@@ -245,15 +255,18 @@ function App() {
     if (newAiMessages.length > 0) setMessages(prev => { const ids = new Set(prev.map(m => m.id)); return [...prev, ...newAiMessages.filter((m: ChatMessage) => !ids.has(m.id))]; });
     if (newPlaybook) setPlaybook(newPlaybook);
     if (newMilestones.length > 0) setAchievedMilestones(prev => Array.from(new Set([...prev, ...newMilestones])));
-    if (newProfile) setUserProfile(prev => ({ ...prev, ...newProfile }));
+    if (newProfile) {
+        setUserProfile(prev => ({ ...prev, ...newProfile }));
+        // If profile updated with credentials during import, re-evaluate auth on next reload, 
+        // but for now let them stay in since they just imported.
+    }
     setNotification({ title: 'Restauración Completa', message: 'Datos importados con éxito.', type: 'success' });
   };
 
   const handleDeleteAll = () => {
-      if (confirm("ADVERTENCIA: ¿Estás seguro de borrar TODO? Esta acción no se puede deshacer.")) {
-          localStorage.clear();
-          window.location.reload();
-      }
+      // Confirmation already handled in SettingsModal
+      localStorage.clear();
+      window.location.reload();
   };
 
   const handleAddAccount = (acc: TradingAccount) => {
@@ -313,7 +326,15 @@ function App() {
           />
         );
       case 'calendar':
-        return <CalendarView trades={accountTrades} />;
+        return (
+           <CalendarView 
+             trades={accountTrades} 
+             onDelete={handleDeleteTrade}
+             onUpdate={handleUpdateTrade}
+             goal={activeAccount.goal}
+             isReal={activeAccount.isReal}
+           />
+        );
       case 'notes':
         return <NotesView notes={notes} onUpdateNotes={setNotes} />;
       case 'ai':
@@ -333,6 +354,19 @@ function App() {
         return null;
     }
   };
+
+  // --- RENDER LOGIN IF LOCKED ---
+  if (!isAuthenticated) {
+      return (
+          <LoginScreen 
+            userProfile={userProfile} 
+            onLoginSuccess={() => setIsAuthenticated(true)}
+            onUpdateProfile={setUserProfile}
+          />
+      );
+  }
+
+  const isUnprotected = !userProfile.username || !userProfile.password;
 
   return (
     <div className="flex flex-col md:flex-row h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white font-sans transition-colors duration-300 overflow-hidden">
@@ -364,8 +398,9 @@ function App() {
              <button onClick={toggleTheme} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
                 {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
              </button>
-             <button onClick={() => setShowSettings(true)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+             <button onClick={() => setShowSettings(true)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg relative">
                 <Settings className="w-5 h-5" />
+                {isUnprotected && <span className="absolute top-1 right-1 w-2 h-2 bg-rose-500 rounded-full animate-pulse"></span>}
              </button>
           </div>
         </div>
@@ -382,6 +417,28 @@ function App() {
 
         {/* Desktop Footer Actions (Hidden on Mobile) */}
         <div className="hidden md:flex flex-col gap-2 shrink-0 mt-auto pt-4 border-t border-slate-100 dark:border-slate-800">
+          
+          {/* Security Status / Logout */}
+          {isUnprotected ? (
+             <button 
+               onClick={() => setShowSettings(true)} 
+               className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/10 ${sidebarCollapsed ? 'justify-center' : ''} animate-pulse-subtle`}
+               title="App sin contraseña"
+             >
+               <Unlock className="w-5 h-5" />
+               <span className={`font-bold text-xs whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Sin Protección</span>
+             </button>
+          ) : (
+            <button 
+              onClick={handleLogout} 
+              className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-rose-50 dark:hover:bg-rose-900/10 hover:text-rose-600 dark:hover:text-rose-400 ${sidebarCollapsed ? 'justify-center' : ''}`}
+              title="Cerrar Sesión"
+            >
+              <LogOut className="w-5 h-5" />
+              <span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Salir</span>
+            </button>
+          )}
+
           <button 
             onClick={() => setShowSettings(true)} 
             className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 ${sidebarCollapsed ? 'justify-center' : ''}`}

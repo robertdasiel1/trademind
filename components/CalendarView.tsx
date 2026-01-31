@@ -1,16 +1,23 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Trade } from '../types';
 import { ChevronLeft, ChevronRight, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import TradeList from './TradeList';
 
 interface Props {
   trades: Trade[];
+  onDelete: (id: string) => void;
+  onUpdate?: (trade: Trade) => void;
+  goal: number;
+  isReal?: boolean;
 }
 
 const DAYS_OF_WEEK = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
-const CalendarView: React.FC<Props> = ({ trades }) => {
+const CalendarView: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal }) => {
   const [currentDate, setCurrentDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const detailsRef = useRef<HTMLDivElement>(null);
 
   // Agrupar trades por día con estadísticas detalladas
   const dailyStats = useMemo(() => {
@@ -38,6 +45,21 @@ const CalendarView: React.FC<Props> = ({ trades }) => {
 
   const monthName = currentDate.toLocaleString('es-ES', { month: 'long' });
 
+  // Trades para el día seleccionado
+  const selectedDayTrades = useMemo(() => {
+      if (!selectedDate) return [];
+      return trades.filter(t => t.date.startsWith(selectedDate)).sort((a,b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  }, [trades, selectedDate]);
+
+  // Efecto para hacer scroll cuando se selecciona un día
+  useEffect(() => {
+    if (selectedDate && detailsRef.current) {
+        setTimeout(() => {
+            detailsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }, 100);
+    }
+  }, [selectedDate]);
+
   const renderDays = () => {
     const days = [];
     
@@ -52,15 +74,21 @@ const CalendarView: React.FC<Props> = ({ trades }) => {
       const dateKey = dateObj.toISOString().split('T')[0];
       const stats = dailyStats[dateKey];
       const isToday = new Date().toISOString().split('T')[0] === dateKey;
+      const isSelected = selectedDate === dateKey;
 
       const winRate = stats ? (stats.wins / stats.count) * 100 : 0;
 
       days.push(
         <div 
-          key={d} 
-          className={`h-24 md:h-28 p-1 md:p-2 rounded-lg md:rounded-xl border transition-all relative group flex flex-col ${
-            isToday ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50'
-          } hover:border-slate-300 dark:hover:border-slate-700`}
+          key={d}
+          onClick={() => setSelectedDate(dateKey)}
+          className={`h-24 md:h-28 p-1 md:p-2 rounded-lg md:rounded-xl border transition-all relative group flex flex-col cursor-pointer ${
+            isSelected
+              ? 'ring-2 ring-blue-500 border-blue-500 z-10 bg-blue-50 dark:bg-blue-900/20 shadow-lg scale-[1.02]'
+              : isToday 
+                ? 'border-emerald-500/50 bg-emerald-500/5' 
+                : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/50 hover:bg-slate-50 dark:hover:bg-slate-800'
+          }`}
         >
           {/* Header: Day Number (Top Right) */}
           <div className="flex justify-end w-full mb-0.5 md:mb-1">
@@ -121,7 +149,7 @@ const CalendarView: React.FC<Props> = ({ trades }) => {
   }, [dailyStats, year, month]);
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500">
+    <div className="space-y-6 animate-in fade-in duration-500 pb-20">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 p-6 rounded-2xl">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 dark:text-white capitalize">{monthName} {year}</h2>
@@ -178,9 +206,42 @@ const CalendarView: React.FC<Props> = ({ trades }) => {
           <span>Día Perdedor</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700"></div>
-          <span>Sin Actividad</span>
+          <div className="w-3 h-3 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-500 ring-1 ring-blue-500"></div>
+          <span>Seleccionado</span>
         </div>
+      </div>
+
+      {/* Detailed Trades List for Selected Date */}
+      <div ref={detailsRef}>
+        {selectedDate && (
+            <div className="mt-8 pt-8 border-t border-slate-200 dark:border-slate-800 animate-in slide-in-from-bottom-10 fade-in duration-500">
+                <div className="flex items-center justify-between mb-4">
+                   <h3 className="text-xl font-bold text-slate-900 dark:text-white">
+                      Trades del {new Date(selectedDate).toLocaleDateString(undefined, {weekday: 'long', day: 'numeric', month: 'long'})}
+                   </h3>
+                   <button 
+                      onClick={() => setSelectedDate(null)} 
+                      className="text-sm font-bold text-blue-500 hover:text-blue-400"
+                   >
+                      Cerrar detalles
+                   </button>
+                </div>
+                
+                {selectedDayTrades.length > 0 ? (
+                    <TradeList 
+                        trades={selectedDayTrades} 
+                        onDelete={onDelete} 
+                        onUpdate={onUpdate}
+                        goal={goal}
+                        isReal={isReal}
+                    />
+                ) : (
+                    <div className="text-center py-12 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700">
+                        <p className="text-slate-500 dark:text-slate-400">No hay operaciones registradas para este día.</p>
+                    </div>
+                )}
+            </div>
+        )}
       </div>
     </div>
   );

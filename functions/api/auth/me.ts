@@ -1,20 +1,28 @@
-
 import { Env, PagesFunction, getUserFromSession } from "../../utils";
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+  });
+}
 
 export const onRequestGet: PagesFunction<Env> = async (context) => {
   const { request, env } = context;
 
   const user = await getUserFromSession(request, env);
 
+  // Si NO hay sesión válida, devuelve 401 (no 200 con {})
   if (!user) {
-    return new Response(JSON.stringify({ error: "Not authenticated" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
+    return json({ user: null }, 401);
   }
 
-  return new Response(JSON.stringify({ user }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
+  // Debug para confirmar deploy (puedes borrar luego)
+  return json({
+    user,
+    deployedAt: new Date().toISOString(),
   });
 };

@@ -10,19 +10,18 @@ function json(data: unknown, status = 200) {
   });
 }
 
-export const onRequestGet: PagesFunction<Env> = async (context) => {
+// Usamos onRequest (no onRequestGet) para evitar cualquier tema de métodos/build.
+export const onRequest: PagesFunction<Env> = async (context) => {
   const { request, env } = context;
 
   const user = await getUserFromSession(request, env);
 
-  // Si NO hay sesión válida, devuelve 401 (no 200 con {})
+  // Esta marca te dice 100% si este archivo está deployado o no
+  const MARK = "ME_ENDPOINT_V2";
+
   if (!user) {
-    return json({ user: null }, 401);
+    return json({ mark: MARK, user: null }, 401);
   }
 
-  // Debug para confirmar deploy (puedes borrar luego)
-  return json({
-    user,
-    deployedAt: new Date().toISOString(),
-  });
+  return json({ mark: MARK, user }, 200);
 };

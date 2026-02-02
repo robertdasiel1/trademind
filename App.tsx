@@ -204,7 +204,35 @@ function App() {
   const handleDeleteAll = () => { localStorage.clear(); window.location.reload(); };
   const handleAddAccount = (acc: TradingAccount) => { setAccounts(prev => [...prev, acc]); setActiveAccountId(acc.id); };
   const handleUpdateAccount = (updated: TradingAccount) => { setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a)); };
-  const handleDeleteAccount = (id: string) => { /* Logic hidden */ };
+  const handleDeleteAccount = (id: string) => {
+    // No permitir eliminar la última cuenta
+    if (accounts.length <= 1) {
+      setNotification({
+        title: 'No se puede eliminar',
+        message: 'Debes tener al menos una cuenta',
+        type: 'error'
+      });
+      return;
+    }
+
+    // Eliminar la cuenta
+    const updatedAccounts = accounts.filter(acc => acc.id !== id);
+    setAccounts(updatedAccounts);
+
+    // Si eliminamos la cuenta activa, cambiar a otra
+    if (activeAccountId === id) {
+      setActiveAccountId(updatedAccounts[0].id);
+    }
+
+    // Eliminar trades asociados a esa cuenta (opcional)
+    setTrades(trades.filter(t => t.accountId !== id));
+
+    setNotification({
+      title: 'Cuenta eliminada',
+      message: 'La cuenta ha sido eliminada correctamente',
+      type: 'success'
+    });
+  };
 
   const renderContent = () => {
     switch (activeTab) {

@@ -4,7 +4,7 @@ import { Trade, TradingAccount, UserProfile, GlobalNote, ChatMessage, Playbook, 
 import { 
   User, Wallet, Database, Settings, X, ChevronRight, Plus, 
   Check, BadgeCheck, TestTube, Pencil, Trash2, Clock, ShieldAlert, 
-  Target, Download, FileSpreadsheet, Siren, Lock, Bell, AlertTriangle
+  Target, Download, FileSpreadsheet, Siren, Lock, Bell, AlertTriangle, Ban
 } from 'lucide-react';
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
@@ -27,6 +27,8 @@ interface Props {
   aiMessages: ChatMessage[];
   playbook: Playbook | null;
   achievedMilestones?: string[];
+  currentUserRole?: string;
+  currentData?: any;
 }
 
 // --- NINJATRADER PARSER LOGIC ---
@@ -258,6 +260,46 @@ const SettingsModal: React.FC<Props> = ({
   const activeAccount = accounts.find(a => a.id === activeAccountId);
 
   const handleFileRead = (e: React.ChangeEvent<HTMLInputElement>) => {
+     const file = e.target.files?.[0];
+     if (!file) return;
+     const reader = new FileReader();
+     reader.onload = (ev) => {
+         try {
+             const content = ev.target?.result as string;
+             const parsed = JSON.parse(content);
+             console.log('=== JSON IMPORTADO ===', parsed);
+             localStorage.setItem('trademind_backup', JSON.stringify(parsed));
+             onImport(parsed);
+             alert('✓ Datos importados. Recargando...');
+             setTimeout(() => window.location.reload(), 1000);
+         } catch (err) { 
+             alert('❌ Error: Archivo JSON inválido'); 
+         }
+     };
+     reader.readAsText(file);
+  };
+
+  const handleCsvImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+     const file = e.target.files?.[0];
+     if (!file) return;
+     const reader = new FileReader();
+     reader.onload = (ev) => {
+         try {
+             const content = ev.target?.result as string;
+             const newTrades = parseNinjaTraderCSV(content);
+             if (newTrades.length > 0) {
+               onImport({trades: newTrades});
+               alert(`✓ ${newTrades.length} trades importados. Recargando...`);
+               setTimeout(() => window.location.reload(), 1000);
+             } else {
+               alert("⚠ No se encontraron trades.");
+             }
+         } catch (err) { 
+             alert('❌ Error CSV'); 
+         }
+     };
+     reader.readAsText(file);
+  };
      const file = e.target.files?.[0];
      if (!file) return;
      const reader = new FileReader();
@@ -788,10 +830,6 @@ const SettingsModal: React.FC<Props> = ({
                             <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Datos</h3>
                         </div>
                         <div className="space-y-4">
-                            <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl">
-                                <p className="text-sm font-bold text-blue-700 dark:text-blue-300 mb-2">💡 Importar o Exportar</p>
-                                <p className="text-xs text-blue-600 dark:text-blue-400">Restaura tu historial o haz backup de todos tus datos.</p>
-                            </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <button 

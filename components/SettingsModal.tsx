@@ -263,8 +263,28 @@ const SettingsModal: React.FC<Props> = ({
      const reader = new FileReader();
      reader.onload = (ev) => {
          try {
-             onImport(JSON.parse(ev.target?.result as string));
-         } catch (err) { alert('Invalid JSON'); }
+             const content = ev.target?.result as string;
+             const parsed = JSON.parse(content);
+             console.log('=== JSON IMPORTADO ===', parsed);
+             
+             // Guardar en localStorage también
+             localStorage.setItem('trademind_backup', JSON.stringify(parsed));
+             console.log('✓ Guardado en localStorage');
+             
+             // Llamar onImport
+             onImport(parsed);
+             console.log('✓ onImport ejecutado');
+             
+             alert('✓ Datos importados correctamente\n\nRecargando la aplicación...');
+             
+             // Recargar después de 1 segundo para que vea los cambios
+             setTimeout(() => {
+                 window.location.reload();
+             }, 1000);
+         } catch (err) { 
+             console.error('❌ Error JSON:', err);
+             alert('❌ Error: Archivo JSON inválido\n\n' + (err instanceof Error ? err.message : '')); 
+         }
      };
      reader.readAsText(file);
   };
@@ -275,14 +295,35 @@ const SettingsModal: React.FC<Props> = ({
      const reader = new FileReader();
      reader.onload = (ev) => {
          try {
-             const newTrades = parseNinjaTraderCSV(ev.target?.result as string);
+             const content = ev.target?.result as string;
+             console.log('=== CSV RECIBIDO ===', 'Longitud:', content.length);
+             
+             const newTrades = parseNinjaTraderCSV(content);
+             console.log('=== TRADES PARSEADOS ===', newTrades.length, 'trades');
+             console.log('Trades:', newTrades);
+             
              if (newTrades.length > 0) {
-               onImport({trades: newTrades});
-               alert(`Se importaron ${newTrades.length} trades consolidados (Ciclos Flat-to-Flat).`);
-             } else alert("No se encontraron operaciones cerradas válidas en el CSV.");
+               const importData = {trades: newTrades};
+               console.log('Importando:', importData);
+               
+               // Guardar en localStorage
+               localStorage.setItem('trademind_trades_temp', JSON.stringify(newTrades));
+               console.log('✓ Guardado en localStorage');
+               
+               onImport(importData);
+               console.log('✓ onImport ejecutado');
+               
+               alert(`✓ Se importaron ${newTrades.length} trades consolidados (Ciclos Flat-to-Flat).\n\nRecargando la aplicación...`);
+               
+               setTimeout(() => {
+                   window.location.reload();
+               }, 1000);
+             } else {
+               alert("⚠ No se encontraron operaciones cerradas válidas en el CSV.");
+             }
          } catch (err) { 
-             console.error(err);
-             alert('Error leyendo CSV'); 
+             console.error('❌ Error CSV:', err);
+             alert('❌ Error leyendo CSV: ' + (err instanceof Error ? err.message : 'Desconocido')); 
          }
      };
      reader.readAsText(file);
@@ -746,22 +787,81 @@ const SettingsModal: React.FC<Props> = ({
                         <div className="flex items-center gap-3 mb-6 pb-6 border-b border-slate-100 dark:border-slate-800">
                             <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Datos</h3>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <button onClick={() => fileInputRef.current?.click()} className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-white transition-all text-left">
-                                <div className="w-10 h-10 bg-purple-100 rounded-full flex items-center justify-center text-purple-600 shrink-0"><Database className="w-5 h-5" /></div>
-                                <div className="min-w-0"><span className="block font-bold text-sm truncate">Backup (JSON)</span><span className="text-[10px] text-slate-500">Restaurar</span></div>
-                                <input type="file" ref={fileInputRef} className="hidden" accept=".json" onChange={handleFileRead} />
-                            </button>
-                            <button onClick={() => csvInputRef.current?.click()} className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-white transition-all text-left">
-                                <div className="w-10 h-10 bg-emerald-100 rounded-full flex items-center justify-center text-emerald-600 shrink-0"><FileSpreadsheet className="w-5 h-5" /></div>
-                                <div className="min-w-0"><span className="block font-bold text-sm truncate">NinjaTrader (CSV)</span><span className="text-[10px] text-slate-500">Importar</span></div>
-                                <input type="file" ref={csvInputRef} className="hidden" accept=".csv" onChange={handleCsvImport} />
-                            </button>
-                            <button onClick={handleExport} className="md:col-span-2 flex items-center gap-4 p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 rounded-xl hover:bg-blue-100 transition-all text-left">
-                                <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 shrink-0"><Download className="w-5 h-5" /></div>
-                                <div className="min-w-0"><span className="block font-bold text-sm">Exportar Todo</span><span className="text-[10px] text-slate-500">Archivo de backup</span></div>
+                        <div className="space-y-4">
+                            <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl">
+                                <p className="text-sm font-bold text-blue-700 dark:text-blue-300 mb-2">💡 Importar o Exportar</p>
+                                <p className="text-xs text-blue-600 dark:text-blue-400">Restaura tu historial o haz backup de todos tus datos.</p>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <button 
+                                onClick={() => {
+                                    console.log('Click en JSON');
+                                    fileInputRef.current?.click();
+                                }} 
+                                className="flex flex-col items-start gap-3 p-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer active:scale-95"
+                            >
+                                <div className="w-10 h-10 bg-purple-100 dark:bg-purple-900/30 rounded-full flex items-center justify-center text-purple-600 dark:text-purple-400">
+                                    <Database className="w-5 h-5" />
+                                </div>
+                                <div>
+                                    <span className="block font-bold text-sm text-slate-900 dark:text-white">Importar Backup (JSON)</span>
+                                    <span className="text-[10px] text-slate-500 dark:text-slate-400">Archivo .json guardado</span>
+                                </div>
+                                <input 
+                                    type="file" 
+                                    ref={fileInputRef} 
+                                    className="hidden" 
+                                    accept=".json" 
+                                    onChange={handleFileRead}
+                                    onClick={(e) => {
+                                        console.log('Input click');
+                                        e.currentTarget.value = '';
+                                    }}
+                                </button>
+
+                                <button 
+                                    onClick={() => {
+                                        console.log('Click en CSV');
+                                        csvInputRef.current?.click();
+                                    }} 
+                                    className="flex flex-col items-start gap-3 p-4 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer active:scale-95"
+                                >
+                                    <div className="w-10 h-10 bg-emerald-100 dark:bg-emerald-900/30 rounded-full flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+                                        <FileSpreadsheet className="w-5 h-5" />
+                                    </div>
+                                    <div>
+                                        <span className="block font-bold text-sm text-slate-900 dark:text-white">Importar NinjaTrader (CSV)</span>
+                                        <span className="text-[10px] text-slate-500 dark:text-slate-400">Exporta desde NinjaTrader</span>
+                                    </div>
+                                    <input 
+                                        type="file" 
+                                        ref={csvInputRef} 
+                                        className="hidden" 
+                                        accept=".csv" 
+                                        onChange={handleCsvImport}
+                                        onClick={(e) => {
+                                            console.log('CSV input click');
+                                            e.currentTarget.value = '';
+                                        }}
+                                    />
+                                </button>
+                            </div>
+
+                            <button 
+                                onClick={handleExport} 
+                                className="w-full flex flex-col items-start gap-3 p-4 bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-900/20 transition-all"
+                            >
+                                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center text-blue-600 dark:text-blue-400">
+                                    <Download className="w-5 h-5" />
+                                </div>
+                                <div>
+                                    <span className="block font-bold text-sm text-slate-900 dark:text-white">Exportar Backup Completo</span>
+                                    <span className="text-[10px] text-slate-500 dark:text-slate-400">Descarga JSON con todos tus datos (trades, notas, perfil, etc.)</span>
+                                </div>
                             </button>
                         </div>
+
                         <div className="pt-8 border-t border-slate-100 dark:border-slate-800">
                              {confirmDeleteAll ? (
                                  <div className="p-4 bg-rose-50 dark:bg-rose-900/20 border border-rose-200 dark:border-rose-800 rounded-xl animate-in fade-in zoom-in duration-200">

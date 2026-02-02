@@ -176,7 +176,31 @@ function App() {
   const handleUpdateTrade = (updatedTrade: Trade) => setTrades(trades.map(t => t.id === updatedTrade.id ? updatedTrade : t));
   const handleSwitchAccount = (id: string) => setActiveAccountId(id);
 
-  const handleImport = (data: any) => { /* Logic hidden */ };
+  const handleImport = (data: any) => {
+    try {
+      // Reemplazar datos en estado y localStorage
+      if (data.trades) setTrades(data.trades);
+      if (data.notes) setNotes(data.notes);
+      if (data.accounts) setAccounts(data.accounts);
+      if (data.userProfile) setUserProfile(data.userProfile);
+      if (data.playbook) setPlaybook(data.playbook);
+      if (data.aiMessages) setMessages(data.aiMessages);
+      if (data.achievedMilestones) setAchievedMilestones(data.achievedMilestones);
+      
+      setNotification({
+        title: 'Importación Completada',
+        message: 'Tus datos han sido reemplazados exitosamente',
+        type: 'success'
+      });
+    } catch (err) {
+      setNotification({
+        title: 'Error en la importación',
+        message: err instanceof Error ? err.message : 'Error desconocido',
+        type: 'error'
+      });
+    }
+  };
+  
   const handleDeleteAll = () => { localStorage.clear(); window.location.reload(); };
   const handleAddAccount = (acc: TradingAccount) => { setAccounts(prev => [...prev, acc]); setActiveAccountId(acc.id); };
   const handleUpdateAccount = (updated: TradingAccount) => { setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a)); };
@@ -279,7 +303,16 @@ function App() {
         aiMessages={messages}
         playbook={playbook}
         achievedMilestones={achievedMilestones}
-        currentUserRole={currentUser?.role} 
+        currentUserRole={currentUser?.role}
+        currentData={{
+          trades,
+          notes,
+          accounts,
+          userProfile,
+          playbook,
+          aiMessages: messages,
+          achievedMilestones
+        }}
       />
       <NotificationToast data={notification} onClose={() => setNotification(null)} />
     </div>

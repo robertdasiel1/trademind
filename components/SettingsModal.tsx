@@ -2,6 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Trade, TradingAccount, UserProfile, GlobalNote, ChatMessage, Playbook } from '../types';
 import { User, Wallet, Database, Settings, X, ChevronRight, ShieldCheck, Ban, Power, Bell } from 'lucide-react';
+import { DataImport } from './DataImport';
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
 
@@ -24,11 +25,12 @@ interface Props {
   playbook: Playbook | null;
   achievedMilestones?: string[];
   currentUserRole?: string;
+  currentData?: any;
 }
 
 const SettingsModal: React.FC<Props> = ({
   isOpen, onClose, userProfile, onUpdateProfile, trades, notes, onImport, onDeleteAll, accounts, activeAccountId, onSetActiveAccount,
-  onAddAccount, onUpdateAccount, onDeleteAccount, aiMessages, playbook, achievedMilestones, currentUserRole
+  onAddAccount, onUpdateAccount, onDeleteAccount, aiMessages, playbook, achievedMilestones, currentUserRole, currentData
 }) => {
   if (!isOpen) return null;
   
@@ -123,6 +125,37 @@ const SettingsModal: React.FC<Props> = ({
                     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
                         <h3 className="text-2xl font-bold text-slate-900 dark:text-white pb-6 border-b border-slate-100 dark:border-slate-800">Perfil</h3>
                         <p className="text-slate-500 italic">La configuración de perfil ahora es gestionada por el administrador.</p>
+                    </div>
+                )}
+
+                {activeTab === 'accounts' && (
+                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white pb-6 border-b border-slate-100 dark:border-slate-800">Cuentas</h3>
+                        <p className="text-slate-500 italic">La gestión de cuentas está disponible en esta sección.</p>
+                    </div>
+                )}
+
+                {activeTab === 'notifications' && (
+                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white pb-6 border-b border-slate-100 dark:border-slate-800">Notificaciones</h3>
+                        <p className="text-slate-500 italic">La configuración de notificaciones está disponible en esta sección.</p>
+                    </div>
+                )}
+
+                {activeTab === 'data' && (
+                    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white pb-6 border-b border-slate-100 dark:border-slate-800 flex items-center gap-2">
+                            <Database className="w-6 h-6 text-emerald-500" /> Importar/Exportar Datos
+                        </h3>
+                        <DataImport 
+                            currentData={currentData}
+                            onImportSuccess={() => {
+                                onClose();
+                            }}
+                            onImportError={(error) => {
+                                console.error('Error de importación:', error);
+                            }}
+                        />
                     </div>
                 )}
 

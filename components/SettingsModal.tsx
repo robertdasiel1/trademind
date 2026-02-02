@@ -1,10 +1,7 @@
 
 import React, { useState, useRef } from 'react';
 import { Trade, TradingAccount, UserProfile, GlobalNote, ChatMessage, Playbook } from '../types';
-import { 
-  User, Wallet, Database, Settings, X, ChevronRight, Plus, 
-  BadgeCheck, TestTube, Pencil, Trash2, Clock, Target, Download, FileSpreadsheet, AlertTriangle, Bell
-} from 'lucide-react';
+import { User, Wallet, Database, Settings, X, ChevronRight, Download, FileSpreadsheet, Bell } from 'lucide-react';
 import { parseNinjaTraderCSV } from '../services/csvParser';
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];

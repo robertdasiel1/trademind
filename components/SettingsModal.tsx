@@ -130,8 +130,83 @@ const SettingsModal: React.FC<Props> = ({
 
                 {activeTab === 'accounts' && (
                     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
-                        <h3 className="text-2xl font-bold text-slate-900 dark:text-white pb-6 border-b border-slate-100 dark:border-slate-800">Cuentas</h3>
-                        <p className="text-slate-500 italic">La gestión de cuentas está disponible en esta sección.</p>
+                        <div className="flex items-center justify-between pb-6 border-b border-slate-100 dark:border-slate-800">
+                            <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Cuentas</h3>
+                            <button className="flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-lg font-bold transition-all text-sm">
+                                <span>+</span> Nueva
+                            </button>
+                        </div>
+                        <p className="text-slate-500 dark:text-slate-400 text-sm">Gestiona tus fondos.</p>
+
+                        {/* Accounts List */}
+                        <div className="space-y-4">
+                            {accounts.map((account) => (
+                                <div key={account.id} className={`p-6 rounded-xl border-2 transition-all ${
+                                    activeAccountId === account.id 
+                                    ? 'border-emerald-500 bg-emerald-500/5 dark:bg-emerald-500/10' 
+                                    : 'border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950'
+                                }`}>
+                                    {/* Header */}
+                                    <div className="flex items-center justify-between mb-6">
+                                        <div className="flex items-center gap-3">
+                                            <h4 className="text-xl font-bold text-slate-900 dark:text-white">{account.name}</h4>
+                                            <div className="flex gap-2">
+                                                {activeAccountId === account.id && (
+                                                    <span className="text-xs font-bold px-2 py-1 bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 rounded-md">✓ ACTIVA</span>
+                                                )}
+                                                <span className="text-xs font-bold px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded-md">PRUEBA</span>
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">
+                                                <span className="text-xl">✏️</span>
+                                            </button>
+                                            <button className="p-2 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors">
+                                                <span className="text-xl">🗑️</span>
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* Broker and Date */}
+                                    <div className="flex items-center gap-4 mb-6 text-sm text-slate-500 dark:text-slate-400">
+                                        <span>{account.broker}</span>
+                                        <span>📅 {new Date(account.createdAt).toLocaleDateString('es-ES', { month: 'short', day: 'numeric', year: '2-digit' })}</span>
+                                    </div>
+
+                                    {/* Stats Grid */}
+                                    <div className="grid grid-cols-3 gap-4 mb-6 p-4 bg-white dark:bg-slate-900/50 rounded-lg border border-slate-100 dark:border-slate-800">
+                                        <div className="text-center">
+                                            <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Capital</p>
+                                            <p className="text-lg font-black text-slate-900 dark:text-white">${account.initialBalance.toLocaleString()}</p>
+                                        </div>
+                                        <div className="text-center">
+                                            <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">DD</p>
+                                            <p className="text-lg font-black text-red-600 dark:text-red-400">-${account.maxDrawdownLimit.toLocaleString()}</p>
+                                        </div>
+                                        <div className="text-center">
+                                            <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-2">Meta</p>
+                                            <p className="text-lg font-black text-emerald-600 dark:text-emerald-400">${account.goal.toLocaleString()}</p>
+                                        </div>
+                                    </div>
+
+                                    {/* Status Badge */}
+                                    <div className="flex items-center gap-2 mb-4 p-3 bg-emerald-100/50 dark:bg-emerald-900/20 rounded-lg border border-emerald-200 dark:border-emerald-800/50">
+                                        <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
+                                        <span className="text-sm font-bold text-emerald-700 dark:text-emerald-300">Cuenta en Uso</span>
+                                    </div>
+
+                                    {/* Use Account Button */}
+                                    {activeAccountId !== account.id && (
+                                        <button 
+                                            onClick={() => onSetActiveAccount(account.id)}
+                                            className="w-full py-3 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-900 dark:text-white font-bold rounded-lg transition-all text-sm"
+                                        >
+                                            Usar esta Cuenta
+                                        </button>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 )}
 

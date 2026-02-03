@@ -97,33 +97,46 @@ function App() {
           return;
         }
 
-        // Some backends return { authenticated: true, user: {...} }
-        // Others return { user: {...} } or even the user object directly.
         const data: any = await res.json();
 
-        const user = data?.user ?? data?.data?.user ?? null;
-        const isAuthenticated =
-          data?.authenticated === true ||
-          !!user ||
-          (data && typeof data === 'object' && (data.id || data.username));
-
-        if (isAuthenticated) {
-          setAuthStatus('authenticated');
-
-          const normalizedUser = user ?? {
-            id: data.id,
-            username: data.username,
-            role: data.role
-          };
-
-          setCurrentUser(normalizedUser);
-
-          const username = normalizedUser?.username;
-          if (username) {
-            setUserProfile(prev => ({ ...prev, name: username }));
+        // If backend explicitly provides authenticated boolean, trust it.
+        if (typeof data?.authenticated === 'boolean') {
+          if (!data.authenticated) {
+            setAuthStatus('unauthenticated');
+            setCurrentUser(null);
+            return;
           }
-        } else {
+        }
+
+        // Some backends return { user: {...} } or { data: { user: {...} } }
+        const user = data?.user ?? data?.data?.user ?? null;
+
+        // Some backends may return the user object directly at the top level.
+        const topLevelUser =
+          data && typeof data === 'object' && (data.id || data.username)
+            ? { id: data.id, username: data.username, role: data.role }
+            : null;
+
+        const userCandidate = user ?? topLevelUser;
+
+        // ✅ Only treat as authenticated if we can actually see a real user identity,
+        // or authenticated=true was explicitly provided above.
+        const hasIdentity = !!(userCandidate && (userCandidate.id || userCandidate.username));
+        const explicitlyAuthenticated = data?.authenticated === true;
+
+        if (!explicitlyAuthenticated && !hasIdentity) {
           setAuthStatus('unauthenticated');
+          setCurrentUser(null);
+          return;
+        }
+
+        setAuthStatus('authenticated');
+
+        if (userCandidate) {
+          setCurrentUser(userCandidate);
+          const username = (userCandidate as any)?.username;
+          if (username) setUserProfile(prev => ({ ...prev, name: username }));
+        } else {
           setCurrentUser(null);
         }
       } catch (e) {
@@ -282,11 +295,47 @@ function App() {
       return (
           <LoginScreen 
             userProfile={userProfile} 
-            onLoginSuccess={() => {
-                setAuthStatus('authenticated');
-                fetch('/api/auth/me').then(r => r.json()).then(d => {
-                    if (d.user) setCurrentUser(d.user);
-                });
+            onLoginSuccess={async () => {
+                // Don't assume login succeeded until /api/auth/me confirms it
+                setAuthStatus('loading');
+                try {
+                    const res = await fetch('/api/auth/me', { method: 'GET' });
+                    if (!res.ok) {
+                        setAuthStatus('unauthenticated');
+                        setCurrentUser(null);
+                        return;
+                    }
+                    const data: any = await res.json();
+
+                    if (typeof data?.authenticated === 'boolean' && !data.authenticated) {
+                        setAuthStatus('unauthenticated');
+                        setCurrentUser(null);
+                        return;
+                    }
+
+                    const user = data?.user ?? data?.data?.user ?? null;
+                    const topLevelUser =
+                        data && typeof data === 'object' && (data.id || data.username)
+                            ? { id: data.id, username: data.username, role: data.role }
+                            : null;
+
+                    const userCandidate = user ?? topLevelUser;
+                    const hasIdentity = !!(userCandidate && (userCandidate.id || userCandidate.username));
+                    const explicitlyAuthenticated = data?.authenticated === true;
+
+                    if (!explicitlyAuthenticated && !hasIdentity) {
+                        setAuthStatus('unauthenticated');
+                        setCurrentUser(null);
+                        return;
+                    }
+
+                    setAuthStatus('authenticated');
+                    if (userCandidate) setCurrentUser(userCandidate);
+                } catch (e) {
+                    console.error("Auth re-check failed", e);
+                    setAuthStatus('unauthenticated');
+                    setCurrentUser(null);
+                }
             }}
             onUpdateProfile={setUserProfile}
           />

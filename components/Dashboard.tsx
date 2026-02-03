@@ -264,12 +264,21 @@ const Dashboard: React.FC<Props> = ({
               })
               .reduce((acc, t) => acc + t.profit, 0);
 
-          // Portfolio Gain as % of initial balance (adjust if you prefer a different baseline)
+          // Optional: % return (kept for the share text, even though the image shows $ PnL)
           const todayReturnPct = account.initialBalance > 0
               ? (todayProfit / account.initialBalance) * 100
               : 0;
 
-          const gainText = `${todayReturnPct >= 0 ? '+' : ''}${todayReturnPct.toFixed(2)}%`;
+          const usd = new Intl.NumberFormat('en-US', {
+              style: 'currency',
+              currency: 'USD',
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+          });
+
+          // Main number on the image: Net PnL in $ (green if positive, red if negative)
+          const pnlText = `${todayProfit >= 0 ? '+' : '-'}${usd.format(Math.abs(todayProfit))}`;
+          const pctText = `${todayReturnPct >= 0 ? '+' : ''}${todayReturnPct.toFixed(2)}%`;
 
           const nicknameValue = userProfile.username || userProfile.name || 'Trader';
           const brokerValue = account.broker || 'Broker';
@@ -280,9 +289,9 @@ const Dashboard: React.FC<Props> = ({
           // Gain (big, centered)
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillStyle = todayReturnPct >= 0 ? '#10b981' : '#ef4444';
+          ctx.fillStyle = todayProfit >= 0 ? '#10b981' : '#ef4444';
           ctx.font = `800 ${Math.round(H * 0.08)}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-          ctx.fillText(gainText, W * 0.5, H * 0.205);
+          ctx.fillText(pnlText, W * 0.5, H * 0.205);
 
           // Bottom fields (right aligned values)
           ctx.textAlign = 'right';
@@ -312,7 +321,7 @@ const Dashboard: React.FC<Props> = ({
           if (canShareFiles) {
               await navigator.share({
                   title: 'Mi Progreso en TradeMind',
-                  text: `Hoy: ${todayProfit >= 0 ? '+' : ''}$${todayProfit.toFixed(2)} (${gainText}) • Trades: ${stats.totalTrades} • WinRate: ${stats.winRate.toFixed(1)}%`,
+                  text: `Hoy: ${pnlText} (${pctText}) • Trades: ${stats.totalTrades} • WinRate: ${stats.winRate.toFixed(1)}%`,
                   files: [file]
               });
               setShareFeedback('¡Compartido!');

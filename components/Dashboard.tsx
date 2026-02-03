@@ -291,7 +291,7 @@ const Dashboard: React.FC<Props> = ({
           ctx.textBaseline = 'middle';
           ctx.fillStyle = todayProfit >= 0 ? '#10b981' : '#ef4444';
           ctx.font = `800 ${Math.round(H * 0.08)}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-          ctx.fillText(pnlText, W * 0.5, H * 0.205);
+          ctx.fillText(pnlText, W * 0.5, H * 0.230);
 
           // Bottom fields (right aligned values)
           ctx.textAlign = 'right';

@@ -15,7 +15,7 @@ import SettingsModal from './components/SettingsModal';
 import LoginScreen from './components/LoginScreen';
 import { Trade, TradingAccount, GlobalNote, ChatMessage, Playbook, UserProfile } from './types';
 import { Chat } from "@google/genai";
-import { syncFromCloudOnStartup } from './utils/cloudBackup';
+import { syncFromCloudOnStartup } from './src/utils/cloudBackup';
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
 

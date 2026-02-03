@@ -46,10 +46,12 @@ const NavItem = ({ active, onClick, icon, label, collapsed }: { active: boolean,
 );
 
 function App() {
+  const didSyncRef = useRef(false);
+
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-      const saved = localStorage.getItem('theme');
-      if (saved === 'dark' || saved === 'light') return saved;
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
 
   const [trades, setTrades] = useState<Trade[]>(() => {
@@ -81,8 +83,9 @@ function App() {
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const [currentUser, setCurrentUser] = useState<{id: string, username: string, role: string} | null>(null);
   
-  useEffect(() => {
-  if (authStatus === "authenticated") {
+useEffect(() => {
+  if (authStatus === "authenticated" && !didSyncRef.current) {
+    didSyncRef.current = true;
     syncFromCloudOnStartup().catch(console.error);
   }
 }, [authStatus]);

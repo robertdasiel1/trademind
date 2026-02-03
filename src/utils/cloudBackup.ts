@@ -2,7 +2,7 @@
 
 type CloudBackupRow = null | {
   backup_json: string; // viene como string JSON desde tu API
-  updated_at: number;  // ms
+  updated_at: number; // ms
   version: number;
 };
 
@@ -15,17 +15,16 @@ function safeParse<T>(value: string): T | null {
 }
 
 /**
- * Convierte un timestamp local que puede venir como:
+ * Convierte un timestamp que puede venir como:
  * - number (ms)
  * - string tipo "2026-02-02T22:52:03.739Z_84_first_win"
  * - string ISO normal "2026-02-02T22:52:03.739Z"
  * a ms (number). Si no se puede, retorna 0.
  */
-function parseLocalTimestampToMs(t: unknown): number {
+function parseTimestampToMs(t: unknown): number {
   if (typeof t === "number" && Number.isFinite(t)) return t;
 
   if (typeof t === "string") {
-    // en tu caso viene con sufijo "_84_first_win", nos quedamos con la parte ISO
     const iso = t.split("_")[0];
     const parsed = Date.parse(iso);
     return Number.isFinite(parsed) ? parsed : 0;
@@ -40,9 +39,7 @@ function parseLocalTimestampToMs(t: unknown): number {
  */
 export async function fetchCloudBackup(): Promise<CloudBackupRow> {
   const res = await fetch("/api/backup", { method: "GET" });
-  if (!res.ok) {
-    return null;
-  }
+  if (!res.ok) return null;
   return (await res.json()) as CloudBackupRow;
 }
 
@@ -68,31 +65,42 @@ export async function uploadLocalBackupToCloud(): Promise<void> {
 }
 
 /**
- * Al iniciar la app (y ya autenticado):
+ * Al iniciar la app (ya autenticado):
  * - baja el backup cloud
- * - compara (cloud.updated_at) vs (local timestamp parseado)
+ * - compara timestamps del BACKUP (cloud.backup_json.timestamp vs local.timestamp)
  * - si cloud es más nuevo, reemplaza local y recarga la app
+ *
+ * Importante: NO comparamos cloud.updated_at contra local.timestamp porque eso puede causar reload infinito.
  */
 export async function syncFromCloudOnStartup(): Promise<void> {
   try {
+    // Protección extra contra loops en la misma sesión del navegador
+    if (sessionStorage.getItem("tm_cloud_sync_done") === "1") return;
+
     const cloud = await fetchCloudBackup();
     if (!cloud) return;
 
     const cloudObj = safeParse<any>(cloud.backup_json);
     if (!cloudObj) return;
 
-    // En cloud el timestamp confiable es updated_at (ms)
-    const cloudTs = Number(cloud.updated_at ?? 0);
+    // ✅ Lo correcto: comparar timestamp interno del backup
+    const cloudTs = parseTimestampToMs(cloudObj?.timestamp) || Number(cloud.updated_at ?? 0);
 
-    // En local tu timestamp es string con sufijo, lo parseamos bien
     const localStr = localStorage.getItem("trademind_backup");
     const localObj = localStr ? safeParse<any>(localStr) : null;
-    const localTs = parseLocalTimestampToMs(localObj?.timestamp);
+    const localTs = parseTimestampToMs(localObj?.timestamp) || 0;
 
-    // Si no hay local o el cloud es más nuevo, restaurar
+    // Si no hay nada local, o cloud es más nuevo, restauramos
     if (cloudTs > localTs) {
       localStorage.setItem("trademind_backup", JSON.stringify(cloudObj));
+
+      // Marca como hecho para evitar loops si por alguna razón el timestamp quedara raro
+      sessionStorage.setItem("tm_cloud_sync_done", "1");
+
       window.location.reload();
+    } else {
+      // Aunque no restauremos, marcamos como hecho para no reintentar en loop por re-renders
+      sessionStorage.setItem("tm_cloud_sync_done", "1");
     }
   } catch (err) {
     console.error("syncFromCloudOnStartup error:", err);

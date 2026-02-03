@@ -16,6 +16,7 @@ import LoginScreen from './components/LoginScreen';
 import { Trade, TradingAccount, GlobalNote, ChatMessage, Playbook, UserProfile } from './types';
 import { Chat } from "@google/genai";
 import { syncFromCloudOnStartup } from "./src/utils/cloudBackup";
+import { scheduleCloudUploadDebounced } from "./src/utils/cloudBackup";
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
 
@@ -81,71 +82,75 @@ function App() {
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const [currentUser, setCurrentUser] = useState<{id: string, username: string, role: string} | null>(null);
   
-  useEffect(() => {
-    syncFromCloudOnStartup().catch(console.error);
-  }, []);
+  // --- CLOUD SYNC CONTROL ---
+  const didCloudSyncRef = useRef(false);
+  const didAutoUploadRef = useRef(false);
 
-  // ✅ FIX: robust auth detection even if API doesn't return "authenticated"
+  // Run cloud sync once per page load AFTER we know we're authenticated.
+  // This makes sync happen on every refresh, but avoids calling the API while logged out.
+  useEffect(() => {
+    if (authStatus === 'unauthenticated') {
+      // allow sync again if user logs back in
+      didCloudSyncRef.current = false;
+      didAutoUploadRef.current = false;
+      return;
+    }
+
+    if (authStatus !== 'authenticated') return;
+    if (didCloudSyncRef.current) return;
+
+    didCloudSyncRef.current = true;
+    syncFromCloudOnStartup().catch(console.error);
+  }, [authStatus]);
+
+  // Auto-upload (debounced) whenever your data changes while authenticated.
+  // Skips the first render (after login / after restore) to avoid immediate push.
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
+
+    if (!didAutoUploadRef.current) {
+      didAutoUploadRef.current = true;
+      return;
+    }
+
+    scheduleCloudUploadDebounced(1200);
+  }, [
+    authStatus,
+    trades,
+    notes,
+    accounts,
+    activeAccountId,
+    userProfile,
+    playbook,
+    messages,
+    achievedMilestones,
+  ]);
+
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const res = await fetch('/api/auth/me', { method: 'GET' });
-
-        if (!res.ok) {
-          setAuthStatus('unauthenticated');
-          setCurrentUser(null);
-          return;
-        }
-
-        const data: any = await res.json();
-
-        // If backend explicitly provides authenticated boolean, trust it.
-        if (typeof data?.authenticated === 'boolean') {
-          if (!data.authenticated) {
-            setAuthStatus('unauthenticated');
-            setCurrentUser(null);
-            return;
-          }
-        }
-
-        // Some backends return { user: {...} } or { data: { user: {...} } }
-        const user = data?.user ?? data?.data?.user ?? null;
-
-        // Some backends may return the user object directly at the top level.
-        const topLevelUser =
-          data && typeof data === 'object' && (data.id || data.username)
-            ? { id: data.id, username: data.username, role: data.role }
-            : null;
-
-        const userCandidate = user ?? topLevelUser;
-
-        // ✅ Only treat as authenticated if we can actually see a real user identity,
-        // or authenticated=true was explicitly provided above.
-        const hasIdentity = !!(userCandidate && (userCandidate.id || userCandidate.username));
-        const explicitlyAuthenticated = data?.authenticated === true;
-
-        if (!explicitlyAuthenticated && !hasIdentity) {
-          setAuthStatus('unauthenticated');
-          setCurrentUser(null);
-          return;
-        }
-
-        setAuthStatus('authenticated');
-
-        if (userCandidate) {
-          setCurrentUser(userCandidate);
-          const username = (userCandidate as any)?.username;
-          if (username) setUserProfile(prev => ({ ...prev, name: username }));
+        const res = await fetch('/api/auth/me');
+        if (res.ok) {
+           const data = await res.json();
+           if (data.authenticated) {
+             setAuthStatus('authenticated');
+             setCurrentUser(data.user);
+             if (data.user?.username) {
+                setUserProfile(prev => ({ ...prev, name: data.user.username })); 
+             }
+           } else {
+             setAuthStatus('unauthenticated');
+             setCurrentUser(null);
+           }
         } else {
-          setCurrentUser(null);
+           setAuthStatus('unauthenticated');
+           setCurrentUser(null);
         }
       } catch (e) {
         console.error("Auth check failed", e);
         setAuthStatus('unauthenticated');
-        setCurrentUser(null);
       }
     };
-
     checkAuth();
   }, []);
 
@@ -201,15 +206,12 @@ function App() {
   };
 
   const handleAddTrade = (trade: Trade) => {
-    const newTrade = { ...trade, accountId: activeAccountId };
-    const updatedTrades = [newTrade, ...trades];
-    setTrades(updatedTrades);
+    setTrades([...trades, trade]);
     setNotification({
-      title: 'Operación Registrada',
-      message: `Resultado: $${trade.profit.toFixed(2)}`,
-      type: trade.profit > 0 ? 'success' : trade.profit < 0 ? 'info' : 'info'
+      title: 'Trade guardado',
+      message: 'Se agregó el trade correctamente',
+      type: 'success'
     });
-    setActiveTab('history');
   };
 
   const handleDeleteTrade = (id: string) => setTrades(trades.filter(t => t.id !== id));
@@ -295,47 +297,11 @@ function App() {
       return (
           <LoginScreen 
             userProfile={userProfile} 
-            onLoginSuccess={async () => {
-                // Don't assume login succeeded until /api/auth/me confirms it
-                setAuthStatus('loading');
-                try {
-                    const res = await fetch('/api/auth/me', { method: 'GET' });
-                    if (!res.ok) {
-                        setAuthStatus('unauthenticated');
-                        setCurrentUser(null);
-                        return;
-                    }
-                    const data: any = await res.json();
-
-                    if (typeof data?.authenticated === 'boolean' && !data.authenticated) {
-                        setAuthStatus('unauthenticated');
-                        setCurrentUser(null);
-                        return;
-                    }
-
-                    const user = data?.user ?? data?.data?.user ?? null;
-                    const topLevelUser =
-                        data && typeof data === 'object' && (data.id || data.username)
-                            ? { id: data.id, username: data.username, role: data.role }
-                            : null;
-
-                    const userCandidate = user ?? topLevelUser;
-                    const hasIdentity = !!(userCandidate && (userCandidate.id || userCandidate.username));
-                    const explicitlyAuthenticated = data?.authenticated === true;
-
-                    if (!explicitlyAuthenticated && !hasIdentity) {
-                        setAuthStatus('unauthenticated');
-                        setCurrentUser(null);
-                        return;
-                    }
-
-                    setAuthStatus('authenticated');
-                    if (userCandidate) setCurrentUser(userCandidate);
-                } catch (e) {
-                    console.error("Auth re-check failed", e);
-                    setAuthStatus('unauthenticated');
-                    setCurrentUser(null);
-                }
+            onLoginSuccess={() => {
+                setAuthStatus('authenticated');
+                fetch('/api/auth/me').then(r => r.json()).then(d => {
+                    if (d.user) setCurrentUser(d.user);
+                });
             }}
             onUpdateProfile={setUserProfile}
           />

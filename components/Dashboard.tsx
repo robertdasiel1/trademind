@@ -223,12 +223,86 @@ const Dashboard: React.FC<Props> = ({
       setIsGeneratingShare(true);
 
       try {
-          // Load the static share template from /public
+          // 1) Load the share template from /public
           const res = await fetch('/share-template.png');
           if (!res.ok) throw new Error('No se pudo cargar el template para compartir');
+          const templateBlob = await res.blob();
 
-          const blob = await res.blob();
-          const file = new File([blob], 'progreso.png', { type: blob.type || 'image/png' });
+          // 2) Convert template to an Image we can draw on a canvas
+          const templateUrl = URL.createObjectURL(templateBlob);
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.src = templateUrl;
+
+          await new Promise<void>((resolve, reject) => {
+              img.onload = () => resolve();
+              img.onerror = () => reject(new Error('No se pudo cargar la imagen del template'));
+          });
+
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          if (!ctx) throw new Error('No se pudo crear el canvas');
+
+          const W = img.naturalWidth || img.width;
+          const H = img.naturalHeight || img.height;
+          canvas.width = W;
+          canvas.height = H;
+
+          // Draw base template
+          ctx.drawImage(img, 0, 0, W, H);
+          URL.revokeObjectURL(templateUrl);
+
+          // 3) Build dynamic values (daily P/L and meta)
+          const now = new Date();
+          const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+          const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
+
+          const todayProfit = trades
+              .filter(t => {
+                  const ts = new Date(t.date).getTime();
+                  return ts >= startOfDay && ts < endOfDay;
+              })
+              .reduce((acc, t) => acc + t.profit, 0);
+
+          // Portfolio Gain as % of initial balance (adjust if you prefer a different baseline)
+          const todayReturnPct = account.initialBalance > 0
+              ? (todayProfit / account.initialBalance) * 100
+              : 0;
+
+          const gainText = `${todayReturnPct >= 0 ? '+' : ''}${todayReturnPct.toFixed(2)}%`;
+
+          const nicknameValue = userProfile.username || userProfile.name || 'Trader';
+          const brokerValue = account.broker || 'Broker';
+          const pad2 = (n: number) => String(n).padStart(2, '0');
+          const shareTimeValue = `${pad2(now.getMonth() + 1)}/${pad2(now.getDate())}/${now.getFullYear()} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+
+          // 4) Draw dynamic text on top of the template
+          // Gain (big, centered)
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillStyle = todayReturnPct >= 0 ? '#10b981' : '#ef4444';
+          ctx.font = `800 ${Math.round(H * 0.08)}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+          ctx.fillText(gainText, W * 0.5, H * 0.205);
+
+          // Bottom fields (right aligned values)
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#0f172a';
+          ctx.font = `700 ${Math.round(H * 0.028)}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
+
+          const valueX = W * 0.92;
+          ctx.fillText(nicknameValue, valueX, H * 0.78);
+          ctx.fillText(shareTimeValue, valueX, H * 0.835);
+          ctx.fillText(brokerValue, valueX, H * 0.89);
+
+          // 5) Canvas -> File -> Share/Download
+          const finalBlob: Blob = await new Promise((resolve, reject) => {
+              canvas.toBlob((b) => {
+                  if (!b) reject(new Error('No se pudo generar la imagen final'));
+                  else resolve(b);
+              }, 'image/png');
+          });
+
+          const file = new File([finalBlob], 'progreso.png', { type: 'image/png' });
 
           const canShareFiles =
               !!navigator.share &&
@@ -238,12 +312,12 @@ const Dashboard: React.FC<Props> = ({
           if (canShareFiles) {
               await navigator.share({
                   title: 'Mi Progreso en TradeMind',
-                  text: `He completado ${stats.totalTrades} trades con un Win Rate de ${stats.winRate.toFixed(1)}%.`,
+                  text: `Hoy: ${todayProfit >= 0 ? '+' : ''}$${todayProfit.toFixed(2)} (${gainText}) • Trades: ${stats.totalTrades} • WinRate: ${stats.winRate.toFixed(1)}%`,
                   files: [file]
               });
               setShareFeedback('¡Compartido!');
           } else {
-              const url = URL.createObjectURL(blob);
+              const url = URL.createObjectURL(finalBlob);
               const link = document.createElement('a');
               link.href = url;
               link.download = 'progreso.png';
@@ -259,6 +333,7 @@ const Dashboard: React.FC<Props> = ({
           setTimeout(() => setShareFeedback(null), 3000);
       }
   };
+
 
   const getDateRangeLabel = () => {
       switch(dateRange) {

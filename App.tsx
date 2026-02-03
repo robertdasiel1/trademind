@@ -82,8 +82,10 @@ function App() {
   const [currentUser, setCurrentUser] = useState<{id: string, username: string, role: string} | null>(null);
   
   useEffect(() => {
+  if (authStatus === "authenticated") {
     syncFromCloudOnStartup().catch(console.error);
-  }, []);
+  }
+}, [authStatus]);
 
   useEffect(() => {
     const checkAuth = async () => {

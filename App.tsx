@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { 
   LayoutDashboard, ListPlus, Calendar, StickyNote, History, 
@@ -16,6 +15,7 @@ import SettingsModal from './components/SettingsModal';
 import LoginScreen from './components/LoginScreen';
 import { Trade, TradingAccount, GlobalNote, ChatMessage, Playbook, UserProfile } from './types';
 import { Chat } from "@google/genai";
+import { syncFromCloudOnStartup } from './utils/cloudBackup';
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
 
@@ -81,6 +81,10 @@ function App() {
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const [currentUser, setCurrentUser] = useState<{id: string, username: string, role: string} | null>(null);
   
+  useEffect(() => {
+    syncFromCloudOnStartup().catch(console.error);
+  }, []);
+
   useEffect(() => {
     const checkAuth = async () => {
       try {

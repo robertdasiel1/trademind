@@ -15,8 +15,7 @@ import SettingsModal from './components/SettingsModal';
 import LoginScreen from './components/LoginScreen';
 import { Trade, TradingAccount, GlobalNote, ChatMessage, Playbook, UserProfile } from './types';
 import { Chat } from "@google/genai";
-import { syncFromCloudOnStartup } from "./src/utils/cloudBackup";
-import { scheduleCloudUploadDebounced } from "./src/utils/cloudBackup";
+import { syncFromCloudOnStartup } from './utils/cloudBackup';
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
 
@@ -82,77 +81,52 @@ function App() {
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const [currentUser, setCurrentUser] = useState<{id: string, username: string, role: string} | null>(null);
   
-  // --- CLOUD SYNC CONTROL ---
-  const didCloudSyncRef = useRef(false);
-  const didAutoUploadRef = useRef(false);
-
-  // Run cloud sync once per page load AFTER we know we're authenticated.
-  // This makes sync happen on every refresh, but avoids calling the API while logged out.
   useEffect(() => {
-    if (authStatus === 'unauthenticated') {
-      // allow sync again if user logs back in
-      didCloudSyncRef.current = false;
-      didAutoUploadRef.current = false;
-      return;
-    }
-
-    if (authStatus !== 'authenticated') return;
-    if (didCloudSyncRef.current) return;
-
-    didCloudSyncRef.current = true;
     syncFromCloudOnStartup().catch(console.error);
-  }, [authStatus]);
-
-  // Auto-upload (debounced) whenever your data changes while authenticated.
-  // Skips the first render (after login / after restore) to avoid immediate push.
-  useEffect(() => {
-    if (authStatus !== 'authenticated') return;
-
-    if (!didAutoUploadRef.current) {
-      didAutoUploadRef.current = true;
-      return;
-    }
-
-    scheduleCloudUploadDebounced(1200);
-  }, [
-    authStatus,
-    trades,
-    notes,
-    accounts,
-    activeAccountId,
-    userProfile,
-    playbook,
-    messages,
-    achievedMilestones,
-  ]);
+  }, []);
 
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const res = await fetch('/api/auth/me');
-        if (res.ok) {
-           const data = await res.json();
-           if (data.authenticated) {
-             setAuthStatus('authenticated');
-             setCurrentUser(data.user);
-             if (data.user?.username) {
-                setUserProfile(prev => ({ ...prev, name: data.user.username })); 
-             }
-           } else {
-             setAuthStatus('unauthenticated');
-             setCurrentUser(null);
-           }
-        } else {
+        const res = await fetch('/api/auth/me', {
+          method: 'GET',
+          credentials: 'include',
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache' },
+        });
+
+        if (!res.ok) {
            setAuthStatus('unauthenticated');
            setCurrentUser(null);
+           return;
+        }
+
+        const data = await res.json();
+
+        // Soporta distintas formas de respuesta del backend:
+        // - { authenticated: true, user: {...} }
+        // - { user: {...} }
+        const isAuthed = data?.authenticated === true || !!data?.user || !!data?.user?.username;
+
+        if (isAuthed) {
+          setAuthStatus('authenticated');
+          setCurrentUser(data.user ?? null);
+          if (data.user?.username) {
+             setUserProfile(prev => ({ ...prev, name: data.user.username })); 
+          }
+        } else {
+          setAuthStatus('unauthenticated');
+          setCurrentUser(null);
         }
       } catch (e) {
         console.error("Auth check failed", e);
         setAuthStatus('unauthenticated');
+        setCurrentUser(null);
       }
     };
     checkAuth();
   }, []);
+
 
   const chatSessionRef = useRef<Chat | null>(null);
 
@@ -206,12 +180,15 @@ function App() {
   };
 
   const handleAddTrade = (trade: Trade) => {
-    setTrades([...trades, trade]);
+    const newTrade = { ...trade, accountId: activeAccountId };
+    const updatedTrades = [newTrade, ...trades];
+    setTrades(updatedTrades);
     setNotification({
-      title: 'Trade guardado',
-      message: 'Se agregó el trade correctamente',
-      type: 'success'
+      title: 'Operación Registrada',
+      message: `Resultado: $${trade.profit.toFixed(2)}`,
+      type: trade.profit > 0 ? 'success' : trade.profit < 0 ? 'info' : 'info'
     });
+    setActiveTab('history');
   };
 
   const handleDeleteTrade = (id: string) => setTrades(trades.filter(t => t.id !== id));
@@ -244,8 +221,9 @@ function App() {
   };
   
   const handleDeleteAll = () => { localStorage.clear(); window.location.reload(); };
-  const handleAddAccount = (acc: TradingAccount) => { setAccounts(prev => [...prev, acc]); setActiveAccountId(acc.id); };
-  const handleUpdateAccount = (updated: TradingAccount) => { setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a)); };
+  
+  const handleAddAccount = (account: TradingAccount) => { setAccounts([account, ...accounts]); };
+  const handleUpdateAccount = (updated: TradingAccount) => { setAccounts(accounts.map(a => a.id === updated.id ? updated : a)); };
   const handleDeleteAccount = (id: string) => {
     // No permitir eliminar la última cuenta
     if (accounts.length <= 1) {
@@ -254,7 +232,6 @@ function App() {
         message: 'Debes tener al menos una cuenta',
         type: 'error'
       });
-      return;
       return;
     }
 

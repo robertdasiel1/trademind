@@ -1,8 +1,8 @@
 // src/utils/cloudBackup.ts
 
 type CloudBackupRow = null | {
-  backup_json: string;
-  updated_at: number;
+  backup_json: string; // en tu API viene como string JSON
+  updated_at: number;  // ms
   version: number;
 };
 
@@ -14,7 +14,7 @@ function safeParse<T>(value: string): T | null {
   }
 }
 
-// Keys reales que tu App.tsx usa
+// Keys reales que tu App guarda en localStorage (las que estás sincronizando)
 const STORAGE_KEYS = [
   "trading_journal_trades",
   "trading_journal_global_notes",
@@ -31,6 +31,11 @@ type BackupPayload = {
   timestamp: string; // ISO
   data: Record<string, any>;
 };
+
+// Marcadores locales (no tocan tus datos, solo controlan sync)
+const LS_LOCAL_UPDATED_AT = "tm_local_updated_at";         // "último cambio local" (ms)
+const LS_CLOUD_LAST_PULL_AT = "tm_cloud_last_pull_at";     // último updated_at cloud aplicado (ms)
+const LS_CLOUD_LAST_PUSH_AT = "tm_cloud_last_push_at";     // último push hecho (ms)
 
 export async function fetchCloudBackup(): Promise<CloudBackupRow> {
   const res = await fetch("/api/backup", { method: "GET" });
@@ -70,11 +75,15 @@ function applyBackupPayloadToLocal(payload: BackupPayload) {
   }
 }
 
+/**
+ * Sube el estado local actual (las STORAGE_KEYS) a la nube.
+ * Marca tm_cloud_last_push_at.
+ */
 export async function uploadLocalBackupToCloud(): Promise<void> {
   const payload = buildLocalBackupPayload();
   if (!payload) return;
 
-  await fetch("/api/backup", {
+  const res = await fetch("/api/backup", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -83,12 +92,23 @@ export async function uploadLocalBackupToCloud(): Promise<void> {
       version: 1,
     }),
   });
+
+  if (res.ok) {
+    localStorage.setItem(LS_CLOUD_LAST_PUSH_AT, String(Date.now()));
+  }
 }
 
 // Debounce para no spamear PUT /api/backup
 let syncTimer: number | null = null;
 
-export function scheduleCloudUploadDebounced(delayMs = 1500): void {
+/**
+ * Llama esto cada vez que tu app cambie datos (trades/notas/etc).
+ * Ideal: llamarlo justo después de guardar en localStorage las keys reales.
+ */
+export function scheduleCloudUploadDebounced(delayMs = 1200): void {
+  // Marca “hubo cambios locales”
+  localStorage.setItem(LS_LOCAL_UPDATED_AT, String(Date.now()));
+
   if (syncTimer) window.clearTimeout(syncTimer);
 
   syncTimer = window.setTimeout(() => {
@@ -98,31 +118,68 @@ export function scheduleCloudUploadDebounced(delayMs = 1500): void {
   }, delayMs);
 }
 
+/**
+ * Sync principal (bidireccional):
+ * 1) PULL: si cloud.updated_at > localUpdatedAt  => baja cloud y aplica
+ * 2) PUSH: si localUpdatedAt > cloud.updated_at  => sube local a cloud
+ *
+ * Esto hace que:
+ * - al abrir en el teléfono, se traiga lo último del PC
+ * - si el teléfono fue el último en editar, empuja su versión a la nube
+ *
+ * Llamar en startup (después de estar autenticado) y también en refresh.
+ */
+let inFlightSync: Promise<void> | null = null;
+
 export async function syncFromCloudOnStartup(): Promise<void> {
-  try {
-    // Evita loops por sesión
-    if (sessionStorage.getItem("tm_cloud_restore_done") === "1") return;
+  // evita múltiples llamadas simultáneas en el mismo render/refresco
+  if (inFlightSync) return inFlightSync;
 
-    const cloud = await fetchCloudBackup();
-    if (!cloud) return;
+  inFlightSync = (async () => {
+    try {
+      const cloud = await fetchCloudBackup();
+      if (!cloud) return;
 
-    const cloudPayload = safeParse<BackupPayload>(cloud.backup_json);
-    if (!cloudPayload?.data) return;
+      const cloudPayload = safeParse<BackupPayload>(cloud.backup_json);
+      if (!cloudPayload?.data) return;
 
-    const cloudUpdatedAt = Number(cloud.updated_at ?? 0);
-    const localUpdatedAt = Number(localStorage.getItem("tm_cloud_last_restore_at") ?? 0);
+      const cloudUpdatedAt = Number(cloud.updated_at ?? 0);
 
-    if (cloudUpdatedAt > localUpdatedAt) {
-      applyBackupPayloadToLocal(cloudPayload);
+      // “último cambio local”
+      const localUpdatedAt = Number(localStorage.getItem(LS_LOCAL_UPDATED_AT) ?? 0);
 
-      localStorage.setItem("tm_cloud_last_restore_at", String(cloudUpdatedAt));
-      sessionStorage.setItem("tm_cloud_restore_done", "1");
+      // Si nunca has marcado local changes pero tienes data local, asumimos que local existe:
+      // (esto ayuda cuando vienes de versiones viejas)
+      const localHasData = STORAGE_KEYS.some((k) => localStorage.getItem(k) != null);
+      const effectiveLocalUpdatedAt = localUpdatedAt || (localHasData ? 1 : 0);
 
-      window.location.reload();
-    } else {
-      sessionStorage.setItem("tm_cloud_restore_done", "1");
+      // 1) PULL si cloud es más nuevo
+      if (cloudUpdatedAt > effectiveLocalUpdatedAt) {
+        applyBackupPayloadToLocal(cloudPayload);
+
+        localStorage.setItem(LS_LOCAL_UPDATED_AT, String(cloudUpdatedAt));
+        localStorage.setItem(LS_CLOUD_LAST_PULL_AT, String(cloudUpdatedAt));
+
+        // No hagas reload obligatorio: si tu App lee desde localStorage con useEffect,
+        // esto ya debería reflejarse. Pero si tu App solo carga una vez,
+        // descomenta el reload.
+        window.location.reload();
+        return;
+      }
+
+      // 2) PUSH si local es más nuevo que cloud
+      if (effectiveLocalUpdatedAt > cloudUpdatedAt) {
+        await uploadLocalBackupToCloud();
+        return;
+      }
+
+      // Si están iguales, no hacemos nada.
+    } catch (err) {
+      console.error("syncFromCloudOnStartup error:", err);
+    } finally {
+      inFlightSync = null;
     }
-  } catch (err) {
-    console.error("syncFromCloudOnStartup error:", err);
-  }
+  })();
+
+  return inFlightSync;
 }

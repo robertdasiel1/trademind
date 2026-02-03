@@ -11,8 +11,6 @@ import {
   Briefcase, Check, Plus, Settings, Quote, Sparkles, Activity, 
   TrendingDown, RefreshCw, Rocket, Share, CalendarDays, Wallet, Calendar, Filter, X
 } from 'lucide-react';
-import html2canvas from 'html2canvas';
-
 interface Props {
   trades: Trade[];
   account: TradingAccount;
@@ -222,38 +220,39 @@ const Dashboard: React.FC<Props> = ({
   }, [theme]);
 
   const handleShare = async () => {
-      if (!dashboardRef.current) return;
       setIsGeneratingShare(true);
+
       try {
-          const canvas = await html2canvas(dashboardRef.current, {
-              backgroundColor: theme === 'dark' ? '#0f172a' : '#f8fafc',
-              scale: 2
-          });
-          
-          canvas.toBlob(async (blob) => {
-              if (!blob) return;
-              const file = new File([blob], 'trading-dashboard.png', { type: 'image/png' });
-              
-              if (navigator.share && navigator.canShare({ files: [file] })) {
-                  try {
-                      await navigator.share({
-                          title: 'Mi Progreso en TradeMind',
-                          text: `He completado ${stats.totalTrades} trades con un Win Rate de ${stats.winRate.toFixed(1)}%.`,
-                          files: [file]
-                      });
-                      setShareFeedback('¡Compartido!');
-                  } catch (e) {
-                      console.log('Share cancelled');
-                  }
-              } else {
-                  const link = document.createElement('a');
-                  link.href = URL.createObjectURL(blob);
-                  link.download = 'trading-dashboard.png';
-                  link.click();
-                  setShareFeedback('Imagen descargada');
-              }
-          });
+          // Load the static share template from /public
+          const res = await fetch('/share-template.png');
+          if (!res.ok) throw new Error('No se pudo cargar el template para compartir');
+
+          const blob = await res.blob();
+          const file = new File([blob], 'progreso.png', { type: blob.type || 'image/png' });
+
+          const canShareFiles =
+              !!navigator.share &&
+              !!navigator.canShare &&
+              navigator.canShare({ files: [file] });
+
+          if (canShareFiles) {
+              await navigator.share({
+                  title: 'Mi Progreso en TradeMind',
+                  text: `He completado ${stats.totalTrades} trades con un Win Rate de ${stats.winRate.toFixed(1)}%.`,
+                  files: [file]
+              });
+              setShareFeedback('¡Compartido!');
+          } else {
+              const url = URL.createObjectURL(blob);
+              const link = document.createElement('a');
+              link.href = url;
+              link.download = 'progreso.png';
+              link.click();
+              URL.revokeObjectURL(url);
+              setShareFeedback('Imagen descargada');
+          }
       } catch (err) {
+          console.error(err);
           setShareFeedback('Error');
       } finally {
           setIsGeneratingShare(false);

@@ -15,7 +15,7 @@ import SettingsModal from './components/SettingsModal';
 import LoginScreen from './components/LoginScreen';
 import { Trade, TradingAccount, GlobalNote, ChatMessage, Playbook, UserProfile } from './types';
 import { Chat } from "@google/genai";
-import { syncFromCloudOnStartup } from "./src/utils/cloudBackup";
+import { syncFromCloudOnStartup } from './utils/cloudBackup';
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
 
@@ -46,12 +46,10 @@ const NavItem = ({ active, onClick, icon, label, collapsed }: { active: boolean,
 );
 
 function App() {
-  const didSyncRef = useRef(false);
-
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const saved = localStorage.getItem('theme');
-    if (saved === 'dark' || saved === 'light') return saved;
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      const saved = localStorage.getItem('theme');
+      if (saved === 'dark' || saved === 'light') return saved;
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
 
   const [trades, setTrades] = useState<Trade[]>(() => {
@@ -83,38 +81,58 @@ function App() {
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const [currentUser, setCurrentUser] = useState<{id: string, username: string, role: string} | null>(null);
   
-useEffect(() => {
-  if (authStatus === "authenticated" && !didSyncRef.current) {
-    didSyncRef.current = true;
+  useEffect(() => {
     syncFromCloudOnStartup().catch(console.error);
-  }
-}, [authStatus]);
+  }, []);
 
+  // ✅ FIX: robust auth detection even if API doesn't return "authenticated"
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const res = await fetch('/api/auth/me');
-        if (res.ok) {
-           const data = await res.json();
-           if (data.authenticated) {
-             setAuthStatus('authenticated');
-             setCurrentUser(data.user);
-             if (data.user?.username) {
-                setUserProfile(prev => ({ ...prev, name: data.user.username })); 
-             }
-           } else {
-             setAuthStatus('unauthenticated');
-             setCurrentUser(null);
-           }
+        const res = await fetch('/api/auth/me', { method: 'GET' });
+
+        if (!res.ok) {
+          setAuthStatus('unauthenticated');
+          setCurrentUser(null);
+          return;
+        }
+
+        // Some backends return { authenticated: true, user: {...} }
+        // Others return { user: {...} } or even the user object directly.
+        const data: any = await res.json();
+
+        const user = data?.user ?? data?.data?.user ?? null;
+        const isAuthenticated =
+          data?.authenticated === true ||
+          !!user ||
+          (data && typeof data === 'object' && (data.id || data.username));
+
+        if (isAuthenticated) {
+          setAuthStatus('authenticated');
+
+          const normalizedUser = user ?? {
+            id: data.id,
+            username: data.username,
+            role: data.role
+          };
+
+          setCurrentUser(normalizedUser);
+
+          const username = normalizedUser?.username;
+          if (username) {
+            setUserProfile(prev => ({ ...prev, name: username }));
+          }
         } else {
-           setAuthStatus('unauthenticated');
-           setCurrentUser(null);
+          setAuthStatus('unauthenticated');
+          setCurrentUser(null);
         }
       } catch (e) {
         console.error("Auth check failed", e);
         setAuthStatus('unauthenticated');
+        setCurrentUser(null);
       }
     };
+
     checkAuth();
   }, []);
 
@@ -221,6 +239,7 @@ useEffect(() => {
         message: 'Debes tener al menos una cuenta',
         type: 'error'
       });
+      return;
       return;
     }
 

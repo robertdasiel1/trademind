@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { DataImport } from './src/components/DataImport';
-import { Dashboard } from './src/components/Dashboard';
-import { TradeList } from './src/components/TradeList';
-import { NotesView } from './src/components/NotesView';
+import Dashboard from './components/Dashboard';
+import TradeList from './components/TradeList';
+import TradeForm from './components/TradeForm';
+import NotesView from './components/NotesView';
 import { AICoach } from './src/components/AICoach';
 import { SettingsModal } from './src/components/SettingsModal';
-import { CalendarView } from './src/components/CalendarView';
+import CalendarView from './components/CalendarView';
 import { LoginScreen } from './src/components/LoginScreen';
 import { showToast } from './src/components/NotificationToast';
 import type { Trade, Note, TradingAccount, UserProfile } from './src/types';

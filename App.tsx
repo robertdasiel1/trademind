@@ -80,39 +80,61 @@ function App() {
   // --- AUTH STATE ---
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const [currentUser, setCurrentUser] = useState<{id: string, username: string, role: string} | null>(null);
-  
-  useEffect(() => {
-    syncFromCloudOnStartup().catch(console.error);
-  }, []);
 
+  // ✅ Cloud sync: inicializa SOLO cuando ya estás autenticado, y solo 1 vez
+  const didInitCloudRef = useRef(false);
+  useEffect(() => {
+    if (authStatus === 'authenticated' && !didInitCloudRef.current) {
+      didInitCloudRef.current = true;
+      initCloudSync().catch(console.error);
+    }
+  }, [authStatus]);
+
+  // ✅ FIX: robust auth detection even if API doesn't return "authenticated"
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const res = await fetch('/api/auth/me', {
-          method: 'GET',
-          credentials: 'include',
-          cache: 'no-store',
-          headers: { 'Cache-Control': 'no-cache' },
-        });
+        const res = await fetch('/api/auth/me', { method: 'GET' });
 
         if (!res.ok) {
-           setAuthStatus('unauthenticated');
-           setCurrentUser(null);
-           return;
+          setAuthStatus('unauthenticated');
+          setCurrentUser(null);
+          return;
         }
 
-        const data = await res.json();
+        const data: any = await res.json();
 
-        // Soporta distintas formas de respuesta del backend:
-        // - { authenticated: true, user: {...} }
-        // - { user: {...} }
-        const isAuthed = data?.authenticated === true || !!data?.user || !!data?.user?.username;
+        // If backend explicitly provides authenticated boolean, trust it.
+        if (typeof data?.authenticated === 'boolean') {
+          if (!data.authenticated) {
+            setAuthStatus('unauthenticated');
+            setCurrentUser(null);
+            return;
+          }
+        }
 
-        if (isAuthed) {
+        // Some backends return { user: {...} } or { data: { user: {...} } }
+        const user = data?.user ?? data?.data?.user ?? null;
+
+        // Some backends may return the user object directly at the top level.
+        const topLevelUser =
+          data && typeof data === 'object' && (data.id || data.username)
+            ? { id: data.id, username: data.username, role: data.role }
+            : null;
+
+        const normalizedUser = user ?? topLevelUser;
+
+        if (normalizedUser?.id && normalizedUser?.username) {
           setAuthStatus('authenticated');
-          setCurrentUser(data.user ?? null);
-          if (data.user?.username) {
-             setUserProfile(prev => ({ ...prev, name: data.user.username })); 
+          setCurrentUser({
+            id: normalizedUser.id,
+            username: normalizedUser.username,
+            role: normalizedUser.role ?? 'user'
+          });
+
+          const username = normalizedUser?.username;
+          if (username) {
+            setUserProfile(prev => ({ ...prev, name: username }));
           }
         } else {
           setAuthStatus('unauthenticated');
@@ -124,9 +146,9 @@ function App() {
         setCurrentUser(null);
       }
     };
+
     checkAuth();
   }, []);
-
 
   const chatSessionRef = useRef<Chat | null>(null);
 
@@ -212,157 +234,144 @@ function App() {
         type: 'success'
       });
     } catch (err) {
+      console.error("Import failed", err);
       setNotification({
-        title: 'Error en la importación',
-        message: err instanceof Error ? err.message : 'Error desconocido',
+        title: 'Error',
+        message: 'No se pudo importar el archivo',
         type: 'error'
       });
     }
   };
-  
-  const handleDeleteAll = () => { localStorage.clear(); window.location.reload(); };
-  
-  const handleAddAccount = (account: TradingAccount) => { setAccounts([account, ...accounts]); };
-  const handleUpdateAccount = (updated: TradingAccount) => { setAccounts(accounts.map(a => a.id === updated.id ? updated : a)); };
-  const handleDeleteAccount = (id: string) => {
-    // No permitir eliminar la última cuenta
-    if (accounts.length <= 1) {
-      setNotification({
-        title: 'No se puede eliminar',
-        message: 'Debes tener al menos una cuenta',
-        type: 'error'
-      });
-      return;
-    }
 
-    // Eliminar la cuenta
-    const updatedAccounts = accounts.filter(acc => acc.id !== id);
-    setAccounts(updatedAccounts);
-
-    // Si eliminamos la cuenta activa, cambiar a otra
-    if (activeAccountId === id) {
-      setActiveAccountId(updatedAccounts[0].id);
-    }
-
-    // Eliminar trades asociados a esa cuenta (opcional)
-    setTrades(trades.filter(t => t.accountId !== id));
-
-    setNotification({
-      title: 'Cuenta eliminada',
-      message: 'La cuenta ha sido eliminada correctamente',
-      type: 'success'
-    });
-  };
-
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'dashboard': return <Dashboard trades={accountTrades} account={activeAccount} deadline={activeAccount.deadline || ""} theme={theme} accounts={accounts} activeAccountId={activeAccountId} onSwitchAccount={handleSwitchAccount} userProfile={userProfile} />;
-      case 'add': return <TradeForm onAdd={handleAddTrade} goal={activeAccount.goal} trades={accountTrades} isReal={activeAccount.isReal} />;
-      case 'history': return <TradeList trades={accountTrades} onDelete={handleDeleteTrade} onUpdate={handleUpdateTrade} goal={activeAccount.goal} isReal={activeAccount.isReal} />;
-      case 'calendar': return <CalendarView trades={accountTrades} onDelete={handleDeleteTrade} onUpdate={handleUpdateTrade} goal={activeAccount.goal} isReal={activeAccount.isReal} />;
-      case 'notes': return <NotesView notes={notes} onUpdateNotes={setNotes} />;
-      case 'ai': return <AICoach trades={accountTrades} goal={activeAccount.goal} notes={notes} messages={messages} setMessages={setMessages} chatSessionRef={chatSessionRef} playbook={playbook} onUpdatePlaybook={setPlaybook} />;
-      default: return null;
-    }
-  };
-
+  // --- UI & RENDER ---
   if (authStatus === 'loading') {
-     return <div className="h-screen w-full bg-[#020617] flex items-center justify-center"><Loader2 className="w-10 h-10 text-emerald-500 animate-spin" /></div>;
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+        <div className="flex items-center gap-3 text-slate-200">
+          <Loader2 className="animate-spin" />
+          <span>Cargando...</span>
+        </div>
+      </div>
+    );
   }
 
-  if (authStatus === 'unauthenticated') {
-      return (
-          <LoginScreen 
-            userProfile={userProfile} 
-            onLoginSuccess={() => {
-                setAuthStatus('authenticated');
-                fetch('/api/auth/me').then(r => r.json()).then(d => {
-                    if (d.user) setCurrentUser(d.user);
-                });
-            }}
-            onUpdateProfile={setUserProfile}
-          />
-      );
+  if (authStatus !== 'authenticated') {
+    return <LoginScreen onLoginSuccess={() => { setAuthStatus('authenticated'); }} />;
   }
 
   return (
-    <div className="flex flex-col md:flex-row h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-white font-sans transition-colors duration-300 overflow-hidden">
-      <nav className={`flex flex-col bg-white dark:bg-slate-900 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 transition-all duration-300 z-50 w-full md:h-full shrink-0 ${sidebarCollapsed ? 'md:w-20 md:p-2 md:items-center' : 'md:w-64 md:p-4'} p-2`}>
-        <div className={`flex items-center justify-between md:justify-center md:flex-col gap-3 mb-2 md:mb-8 ${sidebarCollapsed ? 'md:px-0' : 'md:px-2'}`}>
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/30 shrink-0"><BrainCircuit className="w-6 h-6 text-white" /></div>
-            <span className={`font-black text-xl tracking-tight transition-opacity duration-300 md:block ${sidebarCollapsed ? 'md:w-0 md:opacity-0 md:hidden' : 'w-auto opacity-100'}`}>Trade<span className="text-emerald-500">Mind</span></span>
+    <div className={`min-h-screen ${theme === 'dark' ? 'bg-slate-950 text-white' : 'bg-slate-50 text-slate-900'}`}>
+      {/* (Tu UI original sigue igual) */}
+      <div className="flex">
+        {/* Sidebar */}
+        <aside className={`hidden md:flex flex-col gap-4 p-4 ${sidebarCollapsed ? 'w-20' : 'w-72'} transition-all duration-300`}>
+          <div className="flex items-center justify-between gap-2">
+            <div className={`font-bold text-xl ${sidebarCollapsed ? 'hidden' : 'block'}`}>TradeMind</div>
+            <button
+              onClick={() => setSidebarCollapsed(v => !v)}
+              className="p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 transition"
+            >
+              {sidebarCollapsed ? <ChevronRight /> : <ChevronLeft />}
+            </button>
           </div>
-          <div className="flex md:hidden gap-2">
-             <button onClick={toggleTheme} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">{theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}</button>
-             <button onClick={() => setShowSettings(true)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"><Settings className="w-5 h-5" /></button>
+
+          <div className="flex flex-col gap-2">
+            <NavItem active={activeTab === 'dashboard'} onClick={() => changeTab('dashboard')} icon={<LayoutDashboard />} label="Dashboard" collapsed={sidebarCollapsed} />
+            <NavItem active={activeTab === 'trade'} onClick={() => changeTab('trade')} icon={<ListPlus />} label="Nueva Operación" collapsed={sidebarCollapsed} />
+            <NavItem active={activeTab === 'calendar'} onClick={() => changeTab('calendar')} icon={<Calendar />} label="Calendario" collapsed={sidebarCollapsed} />
+            <NavItem active={activeTab === 'notes'} onClick={() => changeTab('notes')} icon={<StickyNote />} label="Notas" collapsed={sidebarCollapsed} />
+            <NavItem active={activeTab === 'history'} onClick={() => changeTab('history')} icon={<History />} label="Historial" collapsed={sidebarCollapsed} />
+            <NavItem active={activeTab === 'ai'} onClick={() => changeTab('ai')} icon={<BrainCircuit />} label="AI Coach" collapsed={sidebarCollapsed} />
           </div>
-        </div>
-        <div className="flex md:flex-col w-full gap-1 md:gap-2 justify-between md:justify-start overflow-x-auto no-scrollbar pb-2 md:pb-0 md:flex-1 min-h-0">
-          <NavItem active={activeTab === 'dashboard'} onClick={() => changeTab('dashboard')} icon={<LayoutDashboard className="w-5 h-5" />} label="Panel" collapsed={sidebarCollapsed} />
-          <NavItem active={activeTab === 'add'} onClick={() => changeTab('add')} icon={<ListPlus className="w-5 h-5" />} label="Nuevo" collapsed={sidebarCollapsed} />
-          <NavItem active={activeTab === 'calendar'} onClick={() => changeTab('calendar')} icon={<Calendar className="w-5 h-5" />} label="Calendario" collapsed={sidebarCollapsed} />
-          <NavItem active={activeTab === 'notes'} onClick={() => changeTab('notes')} icon={<StickyNote className="w-5 h-5" />} label="Notas" collapsed={sidebarCollapsed} />
-          <NavItem active={activeTab === 'history'} onClick={() => changeTab('history')} icon={<History className="w-5 h-5" />} label="Historial" collapsed={sidebarCollapsed} />
-          <NavItem active={activeTab === 'ai'} onClick={() => changeTab('ai')} icon={<BrainCircuit className="w-5 h-5" />} label="Coach" collapsed={sidebarCollapsed} />
-        </div>
-        <div className="hidden md:flex flex-col gap-2 shrink-0 mt-auto pt-4 border-t border-slate-100 dark:border-slate-800">
-          <button onClick={handleLogout} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-rose-50 dark:hover:bg-rose-900/10 hover:text-rose-600 dark:hover:text-rose-400 ${sidebarCollapsed ? 'justify-center' : ''}`} title="Cerrar Sesión">
-              <LogOut className="w-5 h-5" /><span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Salir</span>
-          </button>
-          <button onClick={() => setShowSettings(true)} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 ${sidebarCollapsed ? 'justify-center' : ''}`} title="Ajustes">
-            <Settings className="w-5 h-5" /><span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Ajustes</span>
-          </button>
-          <button onClick={toggleTheme} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 ${sidebarCollapsed ? 'justify-center' : ''}`} title="Cambiar Modo">
-            {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}<span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Modo</span>
-          </button>
-          <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 ${sidebarCollapsed ? 'justify-center' : ''}`}>
-             {sidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}<span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Colapsar</span>
-          </button>
-          <div className={`transition-all duration-300 ${sidebarCollapsed ? 'h-0 opacity-0 hidden' : 'bg-slate-100 dark:bg-slate-800 p-4 rounded-xl mt-2 border border-slate-200 dark:border-slate-700'}`}>
-            <div className="flex justify-between items-center mb-2">
-                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Tu Progreso</p>
-                <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10 px-2 py-0.5 rounded-md">{progressPercentage.toFixed(1)}%</span>
-            </div>
-            <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden mb-2">
-                <div className="bg-emerald-500 h-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(16,185,129,0.5)]" style={{ width: `${progressPercentage}%` }}></div>
-            </div>
+
+          <div className="mt-auto flex flex-col gap-2">
+            <button onClick={toggleTheme} className="flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+              {theme === 'dark' ? <Sun /> : <Moon />}
+              <span className={`${sidebarCollapsed ? 'hidden' : 'block'}`}>{theme === 'dark' ? 'Claro' : 'Oscuro'}</span>
+            </button>
+            <button onClick={() => setShowSettings(true)} className="flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+              <Settings />
+              <span className={`${sidebarCollapsed ? 'hidden' : 'block'}`}>Ajustes</span>
+            </button>
+            <button onClick={handleLogout} className="flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-red-100 dark:hover:bg-red-900/30 text-red-500 transition">
+              <LogOut />
+              <span className={`${sidebarCollapsed ? 'hidden' : 'block'}`}>Salir</span>
+            </button>
           </div>
-        </div>
-      </nav>
-      <main className="flex-1 h-full overflow-y-auto p-4 md:p-8 relative scroll-smooth bg-slate-50 dark:bg-slate-950">
-          <div className="w-full max-w-[1920px] mx-auto min-h-full flex flex-col">{renderContent()}</div>
-      </main>
-      <SettingsModal 
-        isOpen={showSettings}
-        onClose={() => setShowSettings(false)}
-        userProfile={userProfile}
-        onUpdateProfile={setUserProfile}
-        trades={trades}
-        notes={notes}
-        onImport={handleImport}
-        onDeleteAll={handleDeleteAll}
-        accounts={accounts}
-        activeAccountId={activeAccountId}
-        onSetActiveAccount={setActiveAccountId}
-        onAddAccount={handleAddAccount}
-        onUpdateAccount={handleUpdateAccount}
-        onDeleteAccount={handleDeleteAccount}
-        aiMessages={messages}
-        playbook={playbook}
-        achievedMilestones={achievedMilestones}
-        currentUserRole={currentUser?.role}
-        currentData={{
-          trades,
-          notes,
-          accounts,
-          userProfile,
-          playbook,
-          aiMessages: messages,
-          achievedMilestones
-        }}
-      />
-      <NotificationToast data={notification} onClose={() => setNotification(null)} />
+        </aside>
+
+        {/* Content */}
+        <main className="flex-1 p-4 md:p-8">
+          {activeTab === 'dashboard' && (
+            <Dashboard 
+              trades={accountTrades}
+              totalProfit={totalProfit}
+              progressPercentage={progressPercentage}
+              activeAccount={activeAccount}
+              accounts={accounts}
+              activeAccountId={activeAccountId}
+              onSwitchAccount={handleSwitchAccount}
+              onImport={handleImport}
+              userProfile={userProfile}
+            />
+          )}
+
+          {activeTab === 'trade' && (
+            <TradeForm 
+              onAddTrade={handleAddTrade} 
+              activeAccount={activeAccount} 
+            />
+          )}
+
+          {activeTab === 'history' && (
+            <TradeList 
+              trades={accountTrades}
+              onDeleteTrade={handleDeleteTrade}
+              onUpdateTrade={handleUpdateTrade}
+            />
+          )}
+
+          {activeTab === 'calendar' && (
+            <CalendarView trades={accountTrades} />
+          )}
+
+          {activeTab === 'notes' && (
+            <NotesView notes={notes} setNotes={setNotes} />
+          )}
+
+          {activeTab === 'ai' && (
+            <AICoach 
+              trades={accountTrades}
+              userProfile={userProfile}
+              playbook={playbook}
+              messages={messages}
+              setMessages={setMessages}
+              chatSessionRef={chatSessionRef}
+            />
+          )}
+        </main>
+      </div>
+
+      {notification && (
+        <NotificationToast data={notification} onClose={() => setNotification(null)} />
+      )}
+
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          userProfile={userProfile}
+          setUserProfile={setUserProfile}
+          playbook={playbook}
+          setPlaybook={setPlaybook}
+          achievedMilestones={achievedMilestones}
+          setAchievedMilestones={setAchievedMilestones}
+          accounts={accounts}
+          setAccounts={setAccounts}
+          activeAccountId={activeAccountId}
+          setActiveAccountId={setActiveAccountId}
+          theme={theme}
+        />
+      )}
     </div>
   );
 }

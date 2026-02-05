@@ -1,7 +1,7 @@
 // src/utils/cloudBackup.ts
 
 type CloudBackupRow = null | {
-  backup_json: string;
+  backup_json: any;      // puede venir string u objeto según backend
   updated_at: number;
   version: number;
 };
@@ -16,7 +16,6 @@ function safeParse<T>(value: string): T | null {
 
 /**
  * Keys reales que tu app guarda en localStorage y que queremos sincronizar.
- * (Si agregas nuevos keys en el futuro, añádelos aquí.)
  */
 const STORAGE_KEYS = [
   "trading_journal_trades",
@@ -27,7 +26,6 @@ const STORAGE_KEYS = [
   "trading_journal_playbook",
   "trading_journal_chat_history",
   "trading_journal_milestones",
-  // Compatibilidad con backups antiguos (si existe en tu app)
   "trademind_backup",
 ] as const;
 
@@ -38,8 +36,26 @@ type BackupPayload = {
 };
 
 const KEY_LOCAL_LAST_CHANGE = "tm_local_last_change_at";
+const KEY_LOCAL_LAST_HASH = "tm_local_last_hash";
 const KEY_CLOUD_LAST_RESTORE = "tm_cloud_last_restore_at";
 const KEY_SESSION_RESTORE_DONE = "tm_cloud_restore_done";
+
+let isRestoring = false;
+
+// stringify estable (para comparar contenido y evitar “cambios fantasma”)
+function stableStringify(obj: any): string {
+  if (obj === null || typeof obj !== "object") return JSON.stringify(obj);
+  if (Array.isArray(obj)) return `[${obj.map(stableStringify).join(",")}]`;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map(k => JSON.stringify(k) + ":" + stableStringify(obj[k])).join(",")}}`;
+}
+
+function hashString(s: string): string {
+  // hash simple (djb2) suficiente para detectar cambios
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h) ^ s.charCodeAt(i);
+  return (h >>> 0).toString(16);
+}
 
 export async function fetchCloudBackup(): Promise<CloudBackupRow> {
   const res = await fetch("/api/backup", {
@@ -52,7 +68,7 @@ export async function fetchCloudBackup(): Promise<CloudBackupRow> {
   return (await res.json()) as CloudBackupRow;
 }
 
-function buildLocalBackupPayload(): BackupPayload | null {
+function buildLocalBackupPayload(): { payload: BackupPayload; hash: string } | null {
   const data: Record<string, any> = {};
   let hasAny = false;
 
@@ -62,20 +78,22 @@ function buildLocalBackupPayload(): BackupPayload | null {
 
     hasAny = true;
     const parsed = safeParse<any>(raw);
-    // si no parsea, guardamos el string tal cual
-    data[key] = parsed ?? raw;
+    data[key] = parsed ?? raw; // si no parsea, guardamos string
   }
 
   if (!hasAny) return null;
 
-  return {
+  const payload: BackupPayload = {
     version: 1,
     timestamp: new Date().toISOString(),
     data,
   };
-}
 
-let isRestoring = false;
+  const stable = stableStringify(payload.data);
+  const hash = hashString(stable);
+
+  return { payload, hash };
+}
 
 function applyBackupPayloadToLocal(payload: BackupPayload) {
   isRestoring = true;
@@ -93,56 +111,71 @@ function applyBackupPayloadToLocal(payload: BackupPayload) {
 }
 
 export async function uploadLocalBackupToCloud(): Promise<void> {
-  const payload = buildLocalBackupPayload();
-  if (!payload) return;
+  const built = buildLocalBackupPayload();
+  if (!built) return;
 
-  await fetch("/api/backup", {
+  const { payload, hash } = built;
+  const lastHash = localStorage.getItem(KEY_LOCAL_LAST_HASH);
+
+  // Si el contenido no cambió, no subas y NO marques “cambio local”
+  if (lastHash && lastHash === hash) return;
+
+  const res = await fetch("/api/backup", {
     method: "PUT",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      backup_json: payload,
+      // SIEMPRE string (backend consistente)
+      backup_json: JSON.stringify(payload),
       updated_at: Date.now(),
       version: 1,
     }),
   });
+
+  if (!res.ok) {
+    throw new Error(`PUT /api/backup failed (${res.status})`);
+  }
+
+  // Solo aquí marcamos cambio local “real”
+  localStorage.setItem(KEY_LOCAL_LAST_HASH, hash);
+  localStorage.setItem(KEY_LOCAL_LAST_CHANGE, String(Date.now()));
 }
 
 // Debounce para no spamear PUT /api/backup
 let syncTimer: number | null = null;
 
 export function scheduleCloudUploadDebounced(delayMs = 1500): void {
-  if (isRestoring) return; // evita subir mientras restauramos
+  if (isRestoring) return;
   if (syncTimer) window.clearTimeout(syncTimer);
 
   syncTimer = window.setTimeout(() => {
-    uploadLocalBackupToCloud()
-      .then(() => {
-        // marca último upload/cambio (útil para decidir si cloud es más nuevo)
-        localStorage.setItem(KEY_LOCAL_LAST_CHANGE, String(Date.now()));
-      })
-      .catch((err) => {
-        console.error("uploadLocalBackupToCloud error:", err);
-      });
+    uploadLocalBackupToCloud().catch((err) => {
+      console.error("uploadLocalBackupToCloud error:", err);
+    });
   }, delayMs);
 }
 
 /**
  * Restaura desde la nube si la nube es más nueva que el último restore
  * y también más nueva que los cambios locales.
- *
- * IMPORTANTE: Esto solo debe correr cuando el usuario ya está autenticado
- * (por eso lo llamamos desde App.tsx cuando authStatus === 'authenticated').
  */
 export async function syncFromCloudOnStartup(): Promise<void> {
   try {
-    // Evita loops por sesión
     if (sessionStorage.getItem(KEY_SESSION_RESTORE_DONE) === "1") return;
 
     const cloud = await fetchCloudBackup();
     if (!cloud) return;
 
-    const cloudPayload = safeParse<BackupPayload>(cloud.backup_json);
+    // backup_json puede venir como string u objeto (compatibilidad)
+    let cloudPayload: BackupPayload | null = null;
+
+    if (typeof cloud.backup_json === "string") {
+      cloudPayload = safeParse<BackupPayload>(cloud.backup_json);
+    } else if (cloud.backup_json && typeof cloud.backup_json === "object") {
+      // ya es objeto
+      cloudPayload = cloud.backup_json as BackupPayload;
+    }
+
     if (!cloudPayload?.data) return;
 
     const cloudUpdatedAt = Number(cloud.updated_at ?? 0);
@@ -150,6 +183,7 @@ export async function syncFromCloudOnStartup(): Promise<void> {
     const localLastChangeAt = Number(localStorage.getItem(KEY_LOCAL_LAST_CHANGE) ?? 0);
 
     // Si el usuario hizo cambios locales más recientes que la nube, NO sobre-escribas.
+    // (con el hash fix, esto ya no se dispara “por accidente”)
     if (localLastChangeAt > cloudUpdatedAt) {
       sessionStorage.setItem(KEY_SESSION_RESTORE_DONE, "1");
       return;
@@ -166,7 +200,7 @@ export async function syncFromCloudOnStartup(): Promise<void> {
     localStorage.setItem(KEY_CLOUD_LAST_RESTORE, String(cloudUpdatedAt));
     sessionStorage.setItem(KEY_SESSION_RESTORE_DONE, "1");
 
-    // Recarga para que React re-lea localStorage y actualice estados iniciales
+    // Recarga para que React re-lea localStorage
     window.location.reload();
   } catch (err) {
     console.error("syncFromCloudOnStartup error:", err);
@@ -175,15 +209,11 @@ export async function syncFromCloudOnStartup(): Promise<void> {
 
 /**
  * Inicializa el sync completo:
- * - instala un hook para detectar cambios en localStorage (setItem/removeItem)
+ * - patch localStorage setItem/removeItem (solo para keys que importan)
  * - sube cambios con debounce
- * - intenta restaurar desde cloud al entrar
- * - intenta restaurar al volver a la pestaña (visibilitychange/focus)
- *
- * Devuelve una función cleanup para desinstalar los hooks.
+ * - restore al entrar y al volver (visibility/focus)
  */
 export function initCloudSync(): (() => void) | void {
-  // 1) Patch localStorage.setItem/removeItem para auto-upload
   const originalSetItem = localStorage.setItem.bind(localStorage);
   const originalRemoveItem = localStorage.removeItem.bind(localStorage);
 
@@ -193,8 +223,8 @@ export function initCloudSync(): (() => void) | void {
     originalSetItem(key, value);
 
     if (!isRestoring && shouldSyncKey(key)) {
-      // marca que hubo cambio local
-      originalSetItem(KEY_LOCAL_LAST_CHANGE, String(Date.now()));
+      // No marques “cambio” aquí: solo agenda upload;
+      // el upload decide si realmente cambió (hash).
       scheduleCloudUploadDebounced(1500);
     }
   };
@@ -203,18 +233,15 @@ export function initCloudSync(): (() => void) | void {
     originalRemoveItem(key);
 
     if (!isRestoring && shouldSyncKey(key)) {
-      originalSetItem(KEY_LOCAL_LAST_CHANGE, String(Date.now()));
       scheduleCloudUploadDebounced(1500);
     }
   };
 
-  // 2) Primer intento de restore al iniciar
+  // Primer restore
   syncFromCloudOnStartup().catch(console.error);
 
-  // 3) Reintenta restore cuando vuelves a la app/pestaña
   const onVisible = () => {
     if (document.visibilityState === "visible") {
-      // permite 1 restore más por sesión cuando vuelves (sin loop)
       sessionStorage.removeItem(KEY_SESSION_RESTORE_DONE);
       syncFromCloudOnStartup().catch(console.error);
     }
@@ -228,14 +255,12 @@ export function initCloudSync(): (() => void) | void {
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("focus", onFocus);
 
-  // 4) Best-effort: antes de salir, intenta subir lo último
   const onBeforeUnload = () => {
     uploadLocalBackupToCloud().catch(() => {});
   };
   window.addEventListener("beforeunload", onBeforeUnload);
 
   return () => {
-    // restore originals
     localStorage.setItem = originalSetItem;
     localStorage.removeItem = originalRemoveItem;
 

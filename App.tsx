@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { 
-  LayoutDashboard, ListPlus, Calendar, StickyNote, History, 
-  BrainCircuit, Settings, Sun, Moon, ChevronLeft, ChevronRight, 
-  LogOut, Unlock, Loader2
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import {
+  LayoutDashboard, ListPlus, Calendar, StickyNote, History,
+  BrainCircuit, Settings, Sun, Moon, ChevronLeft, ChevronRight,
+  LogOut, Loader2
 } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import TradeForm from './components/TradeForm';
@@ -15,8 +15,7 @@ import SettingsModal from './components/SettingsModal';
 import LoginScreen from './components/LoginScreen';
 import { Trade, TradingAccount, GlobalNote, ChatMessage, Playbook, UserProfile } from './types';
 import { Chat } from "@google/genai";
-import { syncFromCloudOnStartup } from "./src/utils/cloudBackup";
-import { scheduleCloudUploadDebounced } from "./src/utils/cloudBackup";
+import { syncFromCloudOnStartup, scheduleCloudUploadDebounced } from "./src/utils/cloudBackup";
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
 
@@ -33,9 +32,21 @@ const DEFAULT_ACCOUNT: TradingAccount = {
   createdAt: new Date().toISOString()
 };
 
-const NavItem = ({ active, onClick, icon, label, collapsed }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string, collapsed: boolean }) => (
-  <button 
-    onClick={onClick} 
+const NavItem = ({
+  active,
+  onClick,
+  icon,
+  label,
+  collapsed
+}: {
+  active: boolean,
+  onClick: () => void,
+  icon: React.ReactNode,
+  label: string,
+  collapsed: boolean
+}) => (
+  <button
+    onClick={onClick}
     className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-300 shrink-0 ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
     title={collapsed ? label : ''}
   >
@@ -46,53 +57,66 @@ const NavItem = ({ active, onClick, icon, label, collapsed }: { active: boolean,
   </button>
 );
 
+function safeReadJSON<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-      const saved = localStorage.getItem('theme');
-      if (saved === 'dark' || saved === 'light') return saved;
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
 
-  const [trades, setTrades] = useState<Trade[]>(() => {
-    try { const saved = localStorage.getItem('trading_journal_trades'); return saved ? JSON.parse(saved) : []; } catch { return []; }
-  });
-  const [notes, setNotes] = useState<GlobalNote[]>(() => {
-    try { const saved = localStorage.getItem('trading_journal_global_notes'); return saved ? JSON.parse(saved) : []; } catch { return []; }
-  });
-  const [accounts, setAccounts] = useState<TradingAccount[]>(() => {
-    const saved = localStorage.getItem('trading_journal_accounts');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [trades, setTrades] = useState<Trade[]>(() => safeReadJSON<Trade[]>('trading_journal_trades', []));
+  const [notes, setNotes] = useState<GlobalNote[]>(() => safeReadJSON<GlobalNote[]>('trading_journal_global_notes', []));
+  const [accounts, setAccounts] = useState<TradingAccount[]>(() => safeReadJSON<TradingAccount[]>('trading_journal_accounts', []));
   const [activeAccountId, setActiveAccountId] = useState<string>(() => localStorage.getItem('trading_journal_active_account') || DEFAULT_ACCOUNT.id);
-  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
-    const saved = localStorage.getItem('trading_journal_profile');
-    return saved ? JSON.parse(saved) : { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' };
-  });
-  const [playbook, setPlaybook] = useState<Playbook | null>(() => {
-    try { const saved = localStorage.getItem('trading_journal_playbook'); return saved ? JSON.parse(saved) : null; } catch { return null; }
-  });
-  const [achievedMilestones, setAchievedMilestones] = useState<string[]>(() => {
-    try { const saved = localStorage.getItem('trading_journal_milestones'); return saved ? JSON.parse(saved) : []; } catch { return []; }
-  });
-  const [messages, setMessages] = useState<ChatMessage[]>(() => {
-    try { const saved = localStorage.getItem('trading_journal_chat_history'); return saved ? JSON.parse(saved) : []; } catch { return []; }
-  });
-  
+  const [userProfile, setUserProfile] = useState<UserProfile>(() =>
+    safeReadJSON<UserProfile>('trading_journal_profile', { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' })
+  );
+  const [playbook, setPlaybook] = useState<Playbook | null>(() => safeReadJSON<Playbook | null>('trading_journal_playbook', null));
+  const [achievedMilestones, setAchievedMilestones] = useState<string[]>(() => safeReadJSON<string[]>('trading_journal_milestones', []));
+  const [messages, setMessages] = useState<ChatMessage[]>(() => safeReadJSON<ChatMessage[]>('trading_journal_chat_history', []));
+
   // --- AUTH STATE ---
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
-  const [currentUser, setCurrentUser] = useState<{id: string, username: string, role: string} | null>(null);
-  
+  const [currentUser, setCurrentUser] = useState<{ id: string, username: string, role: string } | null>(null);
+
   // --- CLOUD SYNC CONTROL ---
   const didCloudSyncRef = useRef(false);
   const didAutoUploadRef = useRef(false);
 
+  // Cloud ready = ya hicimos sync + rehidratamos state desde localStorage
+  const [cloudReady, setCloudReady] = useState(false);
+
+  const hydrateFromLocalStorage = useCallback(() => {
+    setTrades(safeReadJSON<Trade[]>('trading_journal_trades', []));
+    setNotes(safeReadJSON<GlobalNote[]>('trading_journal_global_notes', []));
+    const hydratedAccounts = safeReadJSON<TradingAccount[]>('trading_journal_accounts', []);
+    setAccounts(hydratedAccounts.length ? hydratedAccounts : [DEFAULT_ACCOUNT]);
+
+    const hydratedActive = localStorage.getItem('trading_journal_active_account') || DEFAULT_ACCOUNT.id;
+    setActiveAccountId(hydratedActive);
+
+    setUserProfile(safeReadJSON<UserProfile>('trading_journal_profile', { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' }));
+    setPlaybook(safeReadJSON<Playbook | null>('trading_journal_playbook', null));
+    setAchievedMilestones(safeReadJSON<string[]>('trading_journal_milestones', []));
+    setMessages(safeReadJSON<ChatMessage[]>('trading_journal_chat_history', []));
+  }, []);
+
   // Run cloud sync once per page load AFTER we know we're authenticated.
-  // This makes sync happen on every refresh, but avoids calling the API while logged out.
   useEffect(() => {
     if (authStatus === 'unauthenticated') {
-      // allow sync again if user logs back in
       didCloudSyncRef.current = false;
       didAutoUploadRef.current = false;
+      setCloudReady(false);
       return;
     }
 
@@ -100,13 +124,37 @@ function App() {
     if (didCloudSyncRef.current) return;
 
     didCloudSyncRef.current = true;
-    syncFromCloudOnStartup().catch(console.error);
-  }, [authStatus]);
 
-  // Auto-upload (debounced) whenever your data changes while authenticated.
-  // Skips the first render (after login / after restore) to avoid immediate push.
+    (async () => {
+      try {
+        // 1) Pull desde cloud
+        await syncFromCloudOnStartup();
+
+        // 2) Rehidrata state desde localStorage (por si el pull escribió ahí)
+        hydrateFromLocalStorage();
+
+        // 3) Marca listo
+        setCloudReady(true);
+
+        // 4) Push inicial (importante): si este dispositivo tenía datos y cloud estaba vacío/viejo,
+        // esto los sube SIN esperar a que el usuario haga un cambio manual.
+        // (si el pull ya trajo lo último, este push no cambia nada en práctica)
+        scheduleCloudUploadDebounced(800);
+      } catch (e) {
+        console.error(e);
+        // aunque falle el pull, igual marcamos ready para no bloquear uploads
+        setCloudReady(true);
+        // y empujamos lo local (si hay) para que al menos el móvil tenga algo
+        scheduleCloudUploadDebounced(1200);
+      }
+    })();
+  }, [authStatus, hydrateFromLocalStorage]);
+
+  // Auto-upload (debounced) whenever your data changes while authenticated AND cloudReady.
+  // Skips the first render AFTER cloudReady becomes true to avoid immediate double-push.
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
+    if (!cloudReady) return;
 
     if (!didAutoUploadRef.current) {
       didAutoUploadRef.current = true;
@@ -116,6 +164,7 @@ function App() {
     scheduleCloudUploadDebounced(1200);
   }, [
     authStatus,
+    cloudReady,
     trades,
     notes,
     accounts,
@@ -131,20 +180,20 @@ function App() {
       try {
         const res = await fetch('/api/auth/me');
         if (res.ok) {
-           const data = await res.json();
-           if (data.authenticated) {
-             setAuthStatus('authenticated');
-             setCurrentUser(data.user);
-             if (data.user?.username) {
-                setUserProfile(prev => ({ ...prev, name: data.user.username })); 
-             }
-           } else {
-             setAuthStatus('unauthenticated');
-             setCurrentUser(null);
-           }
+          const data = await res.json();
+          if (data.authenticated) {
+            setAuthStatus('authenticated');
+            setCurrentUser(data.user);
+            if (data.user?.username) {
+              setUserProfile(prev => ({ ...prev, name: data.user.username }));
+            }
+          } else {
+            setAuthStatus('unauthenticated');
+            setCurrentUser(null);
+          }
         } else {
-           setAuthStatus('unauthenticated');
-           setCurrentUser(null);
+          setAuthStatus('unauthenticated');
+          setCurrentUser(null);
         }
       } catch (e) {
         console.error("Auth check failed", e);
@@ -166,12 +215,13 @@ function App() {
     if (theme === 'dark') root.classList.add('dark'); else root.classList.remove('dark');
     localStorage.setItem('theme', theme);
   }, [theme]);
-  
+
   useEffect(() => {
     if (accounts.length === 0) {
       setAccounts([DEFAULT_ACCOUNT]);
       setActiveAccountId(DEFAULT_ACCOUNT.id);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => { if (accounts.length > 0) localStorage.setItem('trading_journal_accounts', JSON.stringify(accounts)); }, [accounts]);
@@ -181,14 +231,22 @@ function App() {
   useEffect(() => { localStorage.setItem('trading_journal_profile', JSON.stringify(userProfile)); }, [userProfile]);
   useEffect(() => { localStorage.setItem('sidebar_collapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
   useEffect(() => { localStorage.setItem('trading_journal_chat_history', JSON.stringify(messages)); }, [messages]);
-  useEffect(() => { 
-      if (playbook) localStorage.setItem('trading_journal_playbook', JSON.stringify(playbook)); 
-      else localStorage.removeItem('trading_journal_playbook'); 
+  useEffect(() => {
+    if (playbook) localStorage.setItem('trading_journal_playbook', JSON.stringify(playbook));
+    else localStorage.removeItem('trading_journal_playbook');
   }, [playbook]);
   useEffect(() => { localStorage.setItem('trading_journal_milestones', JSON.stringify(achievedMilestones)); }, [achievedMilestones]);
 
-  const activeAccount = useMemo(() => accounts.find(a => a.id === activeAccountId) || accounts[0] || DEFAULT_ACCOUNT, [accounts, activeAccountId]);
-  const accountTrades = useMemo(() => trades.filter(t => t.accountId === activeAccountId || (!t.accountId && activeAccountId === accounts[0]?.id)), [trades, activeAccountId, accounts]);
+  const activeAccount = useMemo(
+    () => accounts.find(a => a.id === activeAccountId) || accounts[0] || DEFAULT_ACCOUNT,
+    [accounts, activeAccountId]
+  );
+
+  const accountTrades = useMemo(
+    () => trades.filter(t => t.accountId === activeAccountId || (!t.accountId && activeAccountId === accounts[0]?.id)),
+    [trades, activeAccountId, accounts]
+  );
+
   const totalProfit = useMemo(() => accountTrades.reduce((acc, t) => acc + t.profit, 0), [accountTrades]);
   const progressPercentage = Math.min(100, Math.max(0, (totalProfit / activeAccount.goal) * 100));
 
@@ -197,11 +255,14 @@ function App() {
 
   const handleLogout = async () => {
     try {
-        await fetch('/api/auth/logout', { method: 'POST' });
-        setAuthStatus('unauthenticated');
-        setCurrentUser(null);
+      await fetch('/api/auth/logout', { method: 'POST' });
+      setAuthStatus('unauthenticated');
+      setCurrentUser(null);
+      setCloudReady(false);
+      didCloudSyncRef.current = false;
+      didAutoUploadRef.current = false;
     } catch (e) {
-        console.error("Logout failed", e);
+      console.error("Logout failed", e);
     }
   };
 
@@ -220,7 +281,6 @@ function App() {
 
   const handleImport = (data: any) => {
     try {
-      // Reemplazar datos en estado y localStorage
       if (data.trades) setTrades(data.trades);
       if (data.notes) setNotes(data.notes);
       if (data.accounts) setAccounts(data.accounts);
@@ -228,12 +288,15 @@ function App() {
       if (data.playbook) setPlaybook(data.playbook);
       if (data.aiMessages) setMessages(data.aiMessages);
       if (data.achievedMilestones) setAchievedMilestones(data.achievedMilestones);
-      
+
       setNotification({
         title: 'Importación Completada',
         message: 'Tus datos han sido reemplazados exitosamente',
         type: 'success'
       });
+
+      // IMPORTANTE: forzar push luego de importar (para que móvil lo vea)
+      if (authStatus === 'authenticated') scheduleCloudUploadDebounced(800);
     } catch (err) {
       setNotification({
         title: 'Error en la importación',
@@ -242,12 +305,12 @@ function App() {
       });
     }
   };
-  
+
   const handleDeleteAll = () => { localStorage.clear(); window.location.reload(); };
   const handleAddAccount = (acc: TradingAccount) => { setAccounts(prev => [...prev, acc]); setActiveAccountId(acc.id); };
   const handleUpdateAccount = (updated: TradingAccount) => { setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a)); };
+
   const handleDeleteAccount = (id: string) => {
-    // No permitir eliminar la última cuenta
     if (accounts.length <= 1) {
       setNotification({
         title: 'No se puede eliminar',
@@ -255,19 +318,15 @@ function App() {
         type: 'error'
       });
       return;
-      return;
     }
 
-    // Eliminar la cuenta
     const updatedAccounts = accounts.filter(acc => acc.id !== id);
     setAccounts(updatedAccounts);
 
-    // Si eliminamos la cuenta activa, cambiar a otra
     if (activeAccountId === id) {
       setActiveAccountId(updatedAccounts[0].id);
     }
 
-    // Eliminar trades asociados a esa cuenta (opcional)
     setTrades(trades.filter(t => t.accountId !== id));
 
     setNotification({
@@ -279,33 +338,66 @@ function App() {
 
   const renderContent = () => {
     switch (activeTab) {
-      case 'dashboard': return <Dashboard trades={accountTrades} account={activeAccount} deadline={activeAccount.deadline || ""} theme={theme} accounts={accounts} activeAccountId={activeAccountId} onSwitchAccount={handleSwitchAccount} userProfile={userProfile} />;
-      case 'add': return <TradeForm onAdd={handleAddTrade} goal={activeAccount.goal} trades={accountTrades} isReal={activeAccount.isReal} />;
-      case 'history': return <TradeList trades={accountTrades} onDelete={handleDeleteTrade} onUpdate={handleUpdateTrade} goal={activeAccount.goal} isReal={activeAccount.isReal} />;
-      case 'calendar': return <CalendarView trades={accountTrades} onDelete={handleDeleteTrade} onUpdate={handleUpdateTrade} goal={activeAccount.goal} isReal={activeAccount.isReal} />;
-      case 'notes': return <NotesView notes={notes} onUpdateNotes={setNotes} />;
-      case 'ai': return <AICoach trades={accountTrades} goal={activeAccount.goal} notes={notes} messages={messages} setMessages={setMessages} chatSessionRef={chatSessionRef} playbook={playbook} onUpdatePlaybook={setPlaybook} />;
-      default: return null;
+      case 'dashboard':
+        return (
+          <Dashboard
+            trades={accountTrades}
+            account={activeAccount}
+            deadline={activeAccount.deadline || ""}
+            theme={theme}
+            accounts={accounts}
+            activeAccountId={activeAccountId}
+            onSwitchAccount={handleSwitchAccount}
+            userProfile={userProfile}
+          />
+        );
+      case 'add':
+        return <TradeForm onAdd={handleAddTrade} goal={activeAccount.goal} trades={accountTrades} isReal={activeAccount.isReal} />;
+      case 'history':
+        return <TradeList trades={accountTrades} onDelete={handleDeleteTrade} onUpdate={handleUpdateTrade} goal={activeAccount.goal} isReal={activeAccount.isReal} />;
+      case 'calendar':
+        return <CalendarView trades={accountTrades} onDelete={handleDeleteTrade} onUpdate={handleUpdateTrade} goal={activeAccount.goal} isReal={activeAccount.isReal} />;
+      case 'notes':
+        return <NotesView notes={notes} onUpdateNotes={setNotes} />;
+      case 'ai':
+        return (
+          <AICoach
+            trades={accountTrades}
+            goal={activeAccount.goal}
+            notes={notes}
+            messages={messages}
+            setMessages={setMessages}
+            chatSessionRef={chatSessionRef}
+            playbook={playbook}
+            onUpdatePlaybook={setPlaybook}
+          />
+        );
+      default:
+        return null;
     }
   };
 
   if (authStatus === 'loading') {
-     return <div className="h-screen w-full bg-[#020617] flex items-center justify-center"><Loader2 className="w-10 h-10 text-emerald-500 animate-spin" /></div>;
+    return (
+      <div className="h-screen w-full bg-[#020617] flex items-center justify-center">
+        <Loader2 className="w-10 h-10 text-emerald-500 animate-spin" />
+      </div>
+    );
   }
 
   if (authStatus === 'unauthenticated') {
-      return (
-          <LoginScreen 
-            userProfile={userProfile} 
-            onLoginSuccess={() => {
-                setAuthStatus('authenticated');
-                fetch('/api/auth/me').then(r => r.json()).then(d => {
-                    if (d.user) setCurrentUser(d.user);
-                });
-            }}
-            onUpdateProfile={setUserProfile}
-          />
-      );
+    return (
+      <LoginScreen
+        userProfile={userProfile}
+        onLoginSuccess={() => {
+          setAuthStatus('authenticated');
+          fetch('/api/auth/me').then(r => r.json()).then(d => {
+            if (d.user) setCurrentUser(d.user);
+          });
+        }}
+        onUpdateProfile={setUserProfile}
+      />
+    );
   }
 
   return (
@@ -313,14 +405,23 @@ function App() {
       <nav className={`flex flex-col bg-white dark:bg-slate-900 border-b md:border-b-0 md:border-r border-slate-200 dark:border-slate-800 transition-all duration-300 z-50 w-full md:h-full shrink-0 ${sidebarCollapsed ? 'md:w-20 md:p-2 md:items-center' : 'md:w-64 md:p-4'} p-2`}>
         <div className={`flex items-center justify-between md:justify-center md:flex-col gap-3 mb-2 md:mb-8 ${sidebarCollapsed ? 'md:px-0' : 'md:px-2'}`}>
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/30 shrink-0"><BrainCircuit className="w-6 h-6 text-white" /></div>
-            <span className={`font-black text-xl tracking-tight transition-opacity duration-300 md:block ${sidebarCollapsed ? 'md:w-0 md:opacity-0 md:hidden' : 'w-auto opacity-100'}`}>Trade<span className="text-emerald-500">Mind</span></span>
+            <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-500/30 shrink-0">
+              <BrainCircuit className="w-6 h-6 text-white" />
+            </div>
+            <span className={`font-black text-xl tracking-tight transition-opacity duration-300 md:block ${sidebarCollapsed ? 'md:w-0 md:opacity-0 md:hidden' : 'w-auto opacity-100'}`}>
+              Trade<span className="text-emerald-500">Mind</span>
+            </span>
           </div>
           <div className="flex md:hidden gap-2">
-             <button onClick={toggleTheme} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">{theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}</button>
-             <button onClick={() => setShowSettings(true)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"><Settings className="w-5 h-5" /></button>
+            <button onClick={toggleTheme} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+              {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            </button>
+            <button onClick={() => setShowSettings(true)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
+              <Settings className="w-5 h-5" />
+            </button>
           </div>
         </div>
+
         <div className="flex md:flex-col w-full gap-1 md:gap-2 justify-between md:justify-start overflow-x-auto no-scrollbar pb-2 md:pb-0 md:flex-1 min-h-0">
           <NavItem active={activeTab === 'dashboard'} onClick={() => changeTab('dashboard')} icon={<LayoutDashboard className="w-5 h-5" />} label="Panel" collapsed={sidebarCollapsed} />
           <NavItem active={activeTab === 'add'} onClick={() => changeTab('add')} icon={<ListPlus className="w-5 h-5" />} label="Nuevo" collapsed={sidebarCollapsed} />
@@ -329,34 +430,47 @@ function App() {
           <NavItem active={activeTab === 'history'} onClick={() => changeTab('history')} icon={<History className="w-5 h-5" />} label="Historial" collapsed={sidebarCollapsed} />
           <NavItem active={activeTab === 'ai'} onClick={() => changeTab('ai')} icon={<BrainCircuit className="w-5 h-5" />} label="Coach" collapsed={sidebarCollapsed} />
         </div>
+
         <div className="hidden md:flex flex-col gap-2 shrink-0 mt-auto pt-4 border-t border-slate-100 dark:border-slate-800">
           <button onClick={handleLogout} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-rose-50 dark:hover:bg-rose-900/10 hover:text-rose-600 dark:hover:text-rose-400 ${sidebarCollapsed ? 'justify-center' : ''}`} title="Cerrar Sesión">
-              <LogOut className="w-5 h-5" /><span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Salir</span>
+            <LogOut className="w-5 h-5" />
+            <span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Salir</span>
           </button>
+
           <button onClick={() => setShowSettings(true)} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 ${sidebarCollapsed ? 'justify-center' : ''}`} title="Ajustes">
-            <Settings className="w-5 h-5" /><span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Ajustes</span>
+            <Settings className="w-5 h-5" />
+            <span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Ajustes</span>
           </button>
+
           <button onClick={toggleTheme} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 ${sidebarCollapsed ? 'justify-center' : ''}`} title="Cambiar Modo">
-            {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}<span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Modo</span>
+            {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            <span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Modo</span>
           </button>
+
           <button onClick={() => setSidebarCollapsed(!sidebarCollapsed)} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 ${sidebarCollapsed ? 'justify-center' : ''}`}>
-             {sidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}<span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Colapsar</span>
+            {sidebarCollapsed ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+            <span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Colapsar</span>
           </button>
+
           <div className={`transition-all duration-300 ${sidebarCollapsed ? 'h-0 opacity-0 hidden' : 'bg-slate-100 dark:bg-slate-800 p-4 rounded-xl mt-2 border border-slate-200 dark:border-slate-700'}`}>
             <div className="flex justify-between items-center mb-2">
-                <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Tu Progreso</p>
-                <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10 px-2 py-0.5 rounded-md">{progressPercentage.toFixed(1)}%</span>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Tu Progreso</p>
+              <span className="text-[10px] font-black text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/10 px-2 py-0.5 rounded-md">
+                {progressPercentage.toFixed(1)}%
+              </span>
             </div>
             <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden mb-2">
-                <div className="bg-emerald-500 h-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(16,185,129,0.5)]" style={{ width: `${progressPercentage}%` }}></div>
+              <div className="bg-emerald-500 h-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(16,185,129,0.5)]" style={{ width: `${progressPercentage}%` }} />
             </div>
           </div>
         </div>
       </nav>
+
       <main className="flex-1 h-full overflow-y-auto p-4 md:p-8 relative scroll-smooth bg-slate-50 dark:bg-slate-950">
-          <div className="w-full max-w-[1920px] mx-auto min-h-full flex flex-col">{renderContent()}</div>
+        <div className="w-full max-w-[1920px] mx-auto min-h-full flex flex-col">{renderContent()}</div>
       </main>
-      <SettingsModal 
+
+      <SettingsModal
         isOpen={showSettings}
         onClose={() => setShowSettings(false)}
         userProfile={userProfile}
@@ -385,6 +499,7 @@ function App() {
           achievedMilestones
         }}
       />
+
       <NotificationToast data={notification} onClose={() => setNotification(null)} />
     </div>
   );

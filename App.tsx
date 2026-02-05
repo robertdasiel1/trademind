@@ -1,8 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   LayoutDashboard, ListPlus, Calendar, StickyNote, History,
   BrainCircuit, Settings, Sun, Moon, ChevronLeft, ChevronRight,
-  LogOut, Loader2
+  LogOut, Unlock, Loader2
 } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import TradeForm from './components/TradeForm';
@@ -15,7 +15,7 @@ import SettingsModal from './components/SettingsModal';
 import LoginScreen from './components/LoginScreen';
 import { Trade, TradingAccount, GlobalNote, ChatMessage, Playbook, UserProfile } from './types';
 import { Chat } from "@google/genai";
-import { syncFromCloudOnStartup, scheduleCloudUploadDebounced } from "./src/utils/cloudBackup";
+import { syncFromCloudOnStartup, scheduleCloudUploadDebounced, initCloudSync } from "./src/utils/cloudBackup";
 
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6)).toISOString().split('T')[0];
 
@@ -32,19 +32,7 @@ const DEFAULT_ACCOUNT: TradingAccount = {
   createdAt: new Date().toISOString()
 };
 
-const NavItem = ({
-  active,
-  onClick,
-  icon,
-  label,
-  collapsed
-}: {
-  active: boolean,
-  onClick: () => void,
-  icon: React.ReactNode,
-  label: string,
-  collapsed: boolean
-}) => (
+const NavItem = ({ active, onClick, icon, label, collapsed }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string, collapsed: boolean }) => (
   <button
     onClick={onClick}
     className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all duration-300 shrink-0 ${active ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-500/30' : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
@@ -57,33 +45,54 @@ const NavItem = ({
   </button>
 );
 
-function safeReadJSON<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const saved = localStorage.getItem('theme');
-    if (saved === 'dark' || saved === 'light') return saved;
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | null;
+    return savedTheme || 'dark';
   });
 
-  const [trades, setTrades] = useState<Trade[]>(() => safeReadJSON<Trade[]>('trading_journal_trades', []));
-  const [notes, setNotes] = useState<GlobalNote[]>(() => safeReadJSON<GlobalNote[]>('trading_journal_global_notes', []));
-  const [accounts, setAccounts] = useState<TradingAccount[]>(() => safeReadJSON<TradingAccount[]>('trading_journal_accounts', []));
-  const [activeAccountId, setActiveAccountId] = useState<string>(() => localStorage.getItem('trading_journal_active_account') || DEFAULT_ACCOUNT.id);
-  const [userProfile, setUserProfile] = useState<UserProfile>(() =>
-    safeReadJSON<UserProfile>('trading_journal_profile', { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' })
-  );
-  const [playbook, setPlaybook] = useState<Playbook | null>(() => safeReadJSON<Playbook | null>('trading_journal_playbook', null));
-  const [achievedMilestones, setAchievedMilestones] = useState<string[]>(() => safeReadJSON<string[]>('trading_journal_milestones', []));
-  const [messages, setMessages] = useState<ChatMessage[]>(() => safeReadJSON<ChatMessage[]>('trading_journal_chat_history', []));
+  const [trades, setTrades] = useState<Trade[]>(() => {
+    try { const saved = localStorage.getItem('trading_journal_trades'); return saved ? JSON.parse(saved) : []; } catch { return []; }
+  });
+
+  const [notes, setNotes] = useState<GlobalNote[]>(() => {
+    try { const saved = localStorage.getItem('trading_journal_global_notes'); return saved ? JSON.parse(saved) : []; } catch { return []; }
+  });
+
+  const [accounts, setAccounts] = useState<TradingAccount[]>(() => {
+    try {
+      const saved = localStorage.getItem('trading_journal_accounts');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return parsed.length ? parsed : [DEFAULT_ACCOUNT];
+    } catch {
+      return [DEFAULT_ACCOUNT];
+    }
+  });
+
+  const [activeAccountId, setActiveAccountId] = useState<string>(() => {
+    return localStorage.getItem('trading_journal_active_account') || DEFAULT_ACCOUNT.id;
+  });
+
+  const [userProfile, setUserProfile] = useState<UserProfile>(() => {
+    try {
+      const saved = localStorage.getItem('trading_journal_profile');
+      return saved ? JSON.parse(saved) : { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' };
+    } catch {
+      return { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' };
+    }
+  });
+
+  const [playbook, setPlaybook] = useState<Playbook | null>(() => {
+    try { const saved = localStorage.getItem('trading_journal_playbook'); return saved ? JSON.parse(saved) : null; } catch { return null; }
+  });
+
+  const [achievedMilestones, setAchievedMilestones] = useState<string[]>(() => {
+    try { const saved = localStorage.getItem('trading_journal_milestones'); return saved ? JSON.parse(saved) : []; } catch { return []; }
+  });
+
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    try { const saved = localStorage.getItem('trading_journal_chat_history'); return saved ? JSON.parse(saved) : []; } catch { return []; }
+  });
 
   // --- AUTH STATE ---
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
@@ -93,30 +102,13 @@ function App() {
   const didCloudSyncRef = useRef(false);
   const didAutoUploadRef = useRef(false);
 
-  // Cloud ready = ya hicimos sync + rehidratamos state desde localStorage
-  const [cloudReady, setCloudReady] = useState(false);
-
-  const hydrateFromLocalStorage = useCallback(() => {
-    setTrades(safeReadJSON<Trade[]>('trading_journal_trades', []));
-    setNotes(safeReadJSON<GlobalNote[]>('trading_journal_global_notes', []));
-    const hydratedAccounts = safeReadJSON<TradingAccount[]>('trading_journal_accounts', []);
-    setAccounts(hydratedAccounts.length ? hydratedAccounts : [DEFAULT_ACCOUNT]);
-
-    const hydratedActive = localStorage.getItem('trading_journal_active_account') || DEFAULT_ACCOUNT.id;
-    setActiveAccountId(hydratedActive);
-
-    setUserProfile(safeReadJSON<UserProfile>('trading_journal_profile', { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' }));
-    setPlaybook(safeReadJSON<Playbook | null>('trading_journal_playbook', null));
-    setAchievedMilestones(safeReadJSON<string[]>('trading_journal_milestones', []));
-    setMessages(safeReadJSON<ChatMessage[]>('trading_journal_chat_history', []));
-  }, []);
-
   // Run cloud sync once per page load AFTER we know we're authenticated.
+  // This makes sync happen on every refresh, but avoids calling the API while logged out.
   useEffect(() => {
     if (authStatus === 'unauthenticated') {
+      // allow sync again if user logs back in
       didCloudSyncRef.current = false;
       didAutoUploadRef.current = false;
-      setCloudReady(false);
       return;
     }
 
@@ -124,37 +116,40 @@ function App() {
     if (didCloudSyncRef.current) return;
 
     didCloudSyncRef.current = true;
+    syncFromCloudOnStartup().catch(console.error);
+  }, [authStatus]);
 
-    (async () => {
-      try {
-        // 1) Pull desde cloud
-        await syncFromCloudOnStartup();
-
-        // 2) Rehidrata state desde localStorage (por si el pull escribió ahí)
-        hydrateFromLocalStorage();
-
-        // 3) Marca listo
-        setCloudReady(true);
-
-        // 4) Push inicial (importante): si este dispositivo tenía datos y cloud estaba vacío/viejo,
-        // esto los sube SIN esperar a que el usuario haga un cambio manual.
-        // (si el pull ya trajo lo último, este push no cambia nada en práctica)
-        scheduleCloudUploadDebounced(800);
-      } catch (e) {
-        console.error(e);
-        // aunque falle el pull, igual marcamos ready para no bloquear uploads
-        setCloudReady(true);
-        // y empujamos lo local (si hay) para que al menos el móvil tenga algo
-        scheduleCloudUploadDebounced(1200);
-      }
-    })();
-  }, [authStatus, hydrateFromLocalStorage]);
-
-  // Auto-upload (debounced) whenever your data changes while authenticated AND cloudReady.
-  // Skips the first render AFTER cloudReady becomes true to avoid immediate double-push.
+  // Install the full cloud sync hooks while authenticated:
+  // - auto-upload on localStorage writes
+  // - re-sync on focus/visibility
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
-    if (!cloudReady) return;
+
+    const cleanup = initCloudSync?.();
+    return () => {
+      if (typeof cleanup === 'function') cleanup();
+    };
+  }, [authStatus]);
+
+  // Optional: live polling so the phone updates even if it stays open
+  // while you add trades on PC.
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
+
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      // allow another restore attempt
+      sessionStorage.removeItem('tm_cloud_restore_done');
+      syncFromCloudOnStartup().catch(console.error);
+    }, 12000);
+
+    return () => window.clearInterval(id);
+  }, [authStatus]);
+
+  // Auto-upload (debounced) whenever your data changes while authenticated.
+  // Skips the first render (after login / after restore) to avoid immediate push.
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
 
     if (!didAutoUploadRef.current) {
       didAutoUploadRef.current = true;
@@ -164,7 +159,6 @@ function App() {
     scheduleCloudUploadDebounced(1200);
   }, [
     authStatus,
-    cloudReady,
     trades,
     notes,
     accounts,
@@ -217,25 +211,41 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    if (accounts.length === 0) {
-      setAccounts([DEFAULT_ACCOUNT]);
-      setActiveAccountId(DEFAULT_ACCOUNT.id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    localStorage.setItem('trading_journal_trades', JSON.stringify(trades));
+  }, [trades]);
 
-  useEffect(() => { if (accounts.length > 0) localStorage.setItem('trading_journal_accounts', JSON.stringify(accounts)); }, [accounts]);
-  useEffect(() => { localStorage.setItem('trading_journal_active_account', activeAccountId); }, [activeAccountId]);
-  useEffect(() => { localStorage.setItem('trading_journal_trades', JSON.stringify(trades)); }, [trades]);
-  useEffect(() => { localStorage.setItem('trading_journal_global_notes', JSON.stringify(notes)); }, [notes]);
-  useEffect(() => { localStorage.setItem('trading_journal_profile', JSON.stringify(userProfile)); }, [userProfile]);
-  useEffect(() => { localStorage.setItem('sidebar_collapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
-  useEffect(() => { localStorage.setItem('trading_journal_chat_history', JSON.stringify(messages)); }, [messages]);
+  useEffect(() => {
+    localStorage.setItem('trading_journal_global_notes', JSON.stringify(notes));
+  }, [notes]);
+
+  useEffect(() => {
+    localStorage.setItem('trading_journal_accounts', JSON.stringify(accounts));
+  }, [accounts]);
+
+  useEffect(() => {
+    localStorage.setItem('trading_journal_active_account', activeAccountId);
+  }, [activeAccountId]);
+
+  useEffect(() => {
+    localStorage.setItem('trading_journal_profile', JSON.stringify(userProfile));
+  }, [userProfile]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebar_collapsed', String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem('trading_journal_chat_history', JSON.stringify(messages));
+  }, [messages]);
+
   useEffect(() => {
     if (playbook) localStorage.setItem('trading_journal_playbook', JSON.stringify(playbook));
     else localStorage.removeItem('trading_journal_playbook');
   }, [playbook]);
-  useEffect(() => { localStorage.setItem('trading_journal_milestones', JSON.stringify(achievedMilestones)); }, [achievedMilestones]);
+
+  useEffect(() => {
+    localStorage.setItem('trading_journal_milestones', JSON.stringify(achievedMilestones));
+  }, [achievedMilestones]);
 
   const activeAccount = useMemo(
     () => accounts.find(a => a.id === activeAccountId) || accounts[0] || DEFAULT_ACCOUNT,
@@ -258,9 +268,6 @@ function App() {
       await fetch('/api/auth/logout', { method: 'POST' });
       setAuthStatus('unauthenticated');
       setCurrentUser(null);
-      setCloudReady(false);
-      didCloudSyncRef.current = false;
-      didAutoUploadRef.current = false;
     } catch (e) {
       console.error("Logout failed", e);
     }
@@ -295,7 +302,7 @@ function App() {
         type: 'success'
       });
 
-      // IMPORTANTE: forzar push luego de importar (para que móvil lo vea)
+      // Forzar push luego de importar (para que móvil lo vea)
       if (authStatus === 'authenticated') scheduleCloudUploadDebounced(800);
     } catch (err) {
       setNotification({
@@ -307,8 +314,15 @@ function App() {
   };
 
   const handleDeleteAll = () => { localStorage.clear(); window.location.reload(); };
-  const handleAddAccount = (acc: TradingAccount) => { setAccounts(prev => [...prev, acc]); setActiveAccountId(acc.id); };
-  const handleUpdateAccount = (updated: TradingAccount) => { setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a)); };
+
+  const handleAddAccount = (acc: TradingAccount) => {
+    setAccounts(prev => [...prev, acc]);
+    setActiveAccountId(acc.id);
+  };
+
+  const handleUpdateAccount = (updated: TradingAccount) => {
+    setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a));
+  };
 
   const handleDeleteAccount = (id: string) => {
     if (accounts.length <= 1) {

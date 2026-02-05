@@ -1,16 +1,26 @@
-export const onRequestGet: PagesFunction<{
-  DB: D1Database;
-}> = async (context) => {
-  const { request, env } = context;
+import type { PagesFunction } from "@cloudflare/workers-types";
 
-  // 1) Leer cookie de sesión (tm_session)
+type Env = {
+  DB: D1Database;
+};
+
+function json(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+    },
+  });
+}
+
+function getSessionId(request: Request): string | null {
   const cookie = request.headers.get("Cookie") || "";
   const match = cookie.match(/(?:^|;\s*)tm_session=([^;]+)/);
-  const sessionId = match ? decodeURIComponent(match[1]) : null;
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
-  if (!sessionId) return new Response("Unauthorized", { status: 401 });
-
-  // 2) Validar sesión y obtener user_id
+async function getUserIdFromSession(env: Env, sessionId: string): Promise<string | null> {
   const now = Math.floor(Date.now() / 1000); // seconds
 
   const sessionRow = await env.DB
@@ -18,62 +28,53 @@ export const onRequestGet: PagesFunction<{
     .bind(sessionId, now)
     .first<{ user_id: string }>();
 
-  if (!sessionRow?.user_id) return new Response("Unauthorized", { status: 401 });
+  return sessionRow?.user_id ?? null;
+}
 
-  // 3) Leer backup del usuario
+export const onRequestGet: PagesFunction<Env> = async (context) => {
+  const { request, env } = context;
+
+  const sessionId = getSessionId(request);
+  if (!sessionId) return json({ ok: false, error: "Unauthorized" }, 401);
+
+  const userId = await getUserIdFromSession(env, sessionId);
+  if (!userId) return json({ ok: false, error: "Unauthorized" }, 401);
+
   const row = await env.DB
     .prepare(
       `SELECT backup_json, updated_at, version
        FROM trading_journal_backups
        WHERE user_id = ? LIMIT 1`
     )
-    .bind(sessionRow.user_id)
+    .bind(userId)
     .first<{ backup_json: string; updated_at: number; version: number }>();
 
-  return Response.json(row ?? null);
+  return json(row ?? null, 200);
 };
 
-export const onRequestPut: PagesFunction<{
-  DB: D1Database;
-}> = async (context) => {
+export const onRequestPut: PagesFunction<Env> = async (context) => {
   const { request, env } = context;
 
-  // 1) Leer cookie de sesión (tm_session)
-  const cookie = request.headers.get("Cookie") || "";
-  const match = cookie.match(/(?:^|;\s*)tm_session=([^;]+)/);
-  const sessionId = match ? decodeURIComponent(match[1]) : null;
+  const sessionId = getSessionId(request);
+  if (!sessionId) return json({ ok: false, error: "Unauthorized" }, 401);
 
-  if (!sessionId) return new Response("Unauthorized", { status: 401 });
+  const userId = await getUserIdFromSession(env, sessionId);
+  if (!userId) return json({ ok: false, error: "Unauthorized" }, 401);
 
-  // 2) Validar sesión y obtener user_id
-  const now = Math.floor(Date.now() / 1000); // seconds
-
-  const sessionRow = await env.DB
-    .prepare("SELECT user_id FROM sessions WHERE id = ? AND expires_at > ? LIMIT 1")
-    .bind(sessionId, now)
-    .first<{ user_id: string }>();
-
-  if (!sessionRow?.user_id) return new Response("Unauthorized", { status: 401 });
-
-  // 3) Leer body
   const body = (await request.json().catch(() => null)) as
     | { backup_json: unknown; updated_at?: number; version?: number }
     | null;
 
   if (!body || body.backup_json == null) {
-    return new Response("Bad Request", { status: 400 });
+    return json({ ok: false, error: "Bad Request" }, 400);
   }
 
-  const updatedAt =
-    typeof body.updated_at === "number" ? body.updated_at : Date.now(); // ms
+  const updatedAt = typeof body.updated_at === "number" ? body.updated_at : Date.now(); // ms
   const version = typeof body.version === "number" ? body.version : 1;
 
   const backupStr =
-    typeof body.backup_json === "string"
-      ? body.backup_json
-      : JSON.stringify(body.backup_json);
+    typeof body.backup_json === "string" ? body.backup_json : JSON.stringify(body.backup_json);
 
-  // 4) Upsert (insert o update)
   await env.DB
     .prepare(
       `INSERT INTO trading_journal_backups (user_id, backup_json, updated_at, version)
@@ -83,8 +84,8 @@ export const onRequestPut: PagesFunction<{
          updated_at = excluded.updated_at,
          version = excluded.version`
     )
-    .bind(sessionRow.user_id, backupStr, updatedAt, version)
+    .bind(userId, backupStr, updatedAt, version)
     .run();
 
-  return Response.json({ ok: true });
+  return json({ ok: true, updated_at: updatedAt }, 200);
 };

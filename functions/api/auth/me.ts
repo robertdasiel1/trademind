@@ -10,18 +10,17 @@ function json(data: unknown, status = 200) {
   });
 }
 
-// Usamos onRequest (no onRequestGet) para evitar cualquier tema de métodos/build.
 export const onRequest: PagesFunction<Env> = async (context) => {
   const { request, env } = context;
 
   const user = await getUserFromSession(request, env);
 
-  // Esta marca te dice 100% si este archivo está deployado o no
-  const MARK = "ME_ENDPOINT_V2";
+  const MARK = "ME_ENDPOINT_V3";
 
+  // ✅ App.tsx espera { authenticated: boolean, user: ... }
   if (!user) {
-    return json({ mark: MARK, user: null }, 401);
+    return json({ mark: MARK, authenticated: false, user: null }, 401);
   }
 
-  return json({ mark: MARK, user }, 200);
+  return json({ mark: MARK, authenticated: true, user }, 200);
 };

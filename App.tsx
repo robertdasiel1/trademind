@@ -19,6 +19,16 @@ import { Chat } from "@google/genai";
 
 import { syncFromCloudOnStartup, scheduleCloudUploadDebounced, initCloudSync } from "./src/utils/cloudBackup";
 
+function safeReadJSON<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    return JSON.parse(raw) as T;
+  } catch {
+    return fallback;
+  }
+}
+
 const DEFAULT_DEADLINE = new Date(new Date().setMonth(new Date().getMonth() + 6))
   .toISOString()
   .split('T')[0];
@@ -35,6 +45,27 @@ const DEFAULT_ACCOUNT: TradingAccount = {
   isReal: false,
   createdAt: new Date().toISOString()
 };
+
+function rehydrateAll(
+  setTrades: React.Dispatch<React.SetStateAction<Trade[]>>,
+  setNotes: React.Dispatch<React.SetStateAction<GlobalNote[]>>,
+  setAccounts: React.Dispatch<React.SetStateAction<TradingAccount[]>>,
+  setActiveAccountId: React.Dispatch<React.SetStateAction<string>>,
+  setUserProfile: React.Dispatch<React.SetStateAction<UserProfile>>,
+  setPlaybook: React.Dispatch<React.SetStateAction<Playbook | null>>,
+  setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
+  setAchievedMilestones: React.Dispatch<React.SetStateAction<string[]>>,
+) {
+  setTrades(safeReadJSON<Trade[]>('trading_journal_trades', []));
+  setNotes(safeReadJSON<GlobalNote[]>('trading_journal_global_notes', []));
+  const a = safeReadJSON<TradingAccount[]>('trading_journal_accounts', []);
+  setAccounts(a.length ? a : [DEFAULT_ACCOUNT]);
+  setActiveAccountId(localStorage.getItem('trading_journal_active_account') || DEFAULT_ACCOUNT.id);
+  setUserProfile(safeReadJSON<UserProfile>('trading_journal_profile', { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' }));
+  setPlaybook(safeReadJSON<Playbook | null>('trading_journal_playbook', null));
+  setMessages(safeReadJSON<ChatMessage[]>('trading_journal_chat_history', []));
+  setAchievedMilestones(safeReadJSON<string[]>('trading_journal_milestones', []));
+}
 
 const NavItem = ({
   active,
@@ -66,16 +97,6 @@ const NavItem = ({
     </span>
   </button>
 );
-
-function safeReadJSON<T>(key: string, fallback: T): T {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return fallback;
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
 
 function App() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -144,7 +165,7 @@ function App() {
   }, [playbook]);
   useEffect(() => { localStorage.setItem('trading_journal_milestones', JSON.stringify(achievedMilestones)); }, [achievedMilestones]);
 
-  // ✅ AUTH CHECK (IMPORTANTE: credentials include para no perder sesión tras reload)
+  // ✅ AUTH CHECK
   useEffect(() => {
     const checkAuth = async () => {
       try {
@@ -178,7 +199,7 @@ function App() {
     checkAuth();
   }, []);
 
-  // ✅ INSTALA SYNC COMPLETO SOLO SI ESTÁ AUTH
+  // ✅ INSTALA SYNC SOLO SI ESTÁ AUTH
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
 
@@ -186,6 +207,33 @@ function App() {
     return () => {
       if (typeof cleanup === 'function') cleanup();
     };
+  }, [authStatus]);
+
+  // ✅ Cuando llega restore desde cloud, rehidratamos estado SIN reload
+  useEffect(() => {
+    if (authStatus !== 'authenticated') return;
+
+    const onRestored = () => {
+      rehydrateAll(
+        setTrades,
+        setNotes,
+        setAccounts,
+        setActiveAccountId,
+        setUserProfile,
+        setPlaybook,
+        setMessages,
+        setAchievedMilestones,
+      );
+
+      setNotification({
+        title: 'Sincronización',
+        message: 'Datos actualizados desde la nube',
+        type: 'success'
+      });
+    };
+
+    window.addEventListener('tm_cloud_restored', onRestored);
+    return () => window.removeEventListener('tm_cloud_restored', onRestored);
   }, [authStatus]);
 
   // ✅ PUSH cuando cambian datos (debounced)
@@ -204,7 +252,7 @@ function App() {
     achievedMilestones,
   ]);
 
-  // ✅ PULL inicial extra al autenticar (por si initCloudSync tarda)
+  // ✅ PULL inicial extra al autenticar
   useEffect(() => {
     if (authStatus !== 'authenticated') return;
     syncFromCloudOnStartup().catch(console.error);
@@ -435,9 +483,19 @@ function App() {
         accounts={accounts}
         activeAccountId={activeAccountId}
         onSetActiveAccount={setActiveAccountId}
-        onAddAccount={handleAddAccount}
-        onUpdateAccount={handleUpdateAccount}
-        onDeleteAccount={handleDeleteAccount}
+        onAddAccount={(acc: TradingAccount) => { setAccounts(prev => [...prev, acc]); setActiveAccountId(acc.id); }}
+        onUpdateAccount={(updated: TradingAccount) => setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a))}
+        onDeleteAccount={(id: string) => {
+          if (accounts.length <= 1) {
+            setNotification({ title: 'No se puede eliminar', message: 'Debes tener al menos una cuenta', type: 'error' });
+            return;
+          }
+          const updatedAccounts = accounts.filter(acc => acc.id !== id);
+          setAccounts(updatedAccounts);
+          if (activeAccountId === id) setActiveAccountId(updatedAccounts[0].id);
+          setTrades(trades.filter(t => t.accountId !== id));
+          setNotification({ title: 'Cuenta eliminada', message: 'La cuenta ha sido eliminada correctamente', type: 'success' });
+        }}
         aiMessages={messages}
         playbook={playbook}
         achievedMilestones={achievedMilestones}

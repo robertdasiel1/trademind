@@ -1,7 +1,7 @@
 // src/utils/cloudBackup.ts
 
 type CloudBackupRow = null | {
-  backup_json: any;     // puede venir string u objeto
+  backup_json: any; // puede venir string u objeto
   updated_at: number;
   version: number;
 };
@@ -13,7 +13,11 @@ type BackupPayload = {
 };
 
 function safeParse<T>(value: string): T | null {
-  try { return JSON.parse(value) as T; } catch { return null; }
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -81,7 +85,6 @@ function buildLocalBackupPayload(): { payload: BackupPayload; hash: string } | n
 
 /**
  * Marca cambio local REAL antes de subir.
- * Esto evita que el restore desde cloud te pise trades nuevos si el PUT tarda/falla.
  */
 function markLocalChangeIfContentChanged(): void {
   if (isRestoring) return;
@@ -130,15 +133,15 @@ export async function uploadLocalBackupToCloud(): Promise<void> {
   if (!built) return;
 
   const { payload } = built;
+  const now = Date.now();
 
   const res = await fetch("/api/backup", {
     method: "PUT",
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      // SIEMPRE string: backend consistente
       backup_json: JSON.stringify(payload),
-      updated_at: Date.now(),
+      updated_at: now,
       version: 1,
     }),
   });
@@ -146,6 +149,11 @@ export async function uploadLocalBackupToCloud(): Promise<void> {
   if (!res.ok) {
     throw new Error(`PUT /api/backup failed (${res.status})`);
   }
+
+  // ✅ CLAVE: si yo acabo de subir, cloud ya tiene mi versión
+  // Esto evita restores repetidos + recargas que se ven como “me saca al login”.
+  localStorage.setItem(KEY_CLOUD_LAST_RESTORE, String(now));
+  sessionStorage.setItem(KEY_SESSION_RESTORE_DONE, "1");
 }
 
 // Debounce PUT
@@ -154,7 +162,6 @@ let syncTimer: number | null = null;
 export function scheduleCloudUploadDebounced(delayMs = 1500): void {
   if (isRestoring) return;
 
-  // Marca cambio local ANTES de subir
   markLocalChangeIfContentChanged();
 
   if (syncTimer) window.clearTimeout(syncTimer);
@@ -202,8 +209,9 @@ export async function syncFromCloudOnStartup(): Promise<void> {
     localStorage.setItem(KEY_CLOUD_LAST_RESTORE, String(cloudUpdatedAt));
     sessionStorage.setItem(KEY_SESSION_RESTORE_DONE, "1");
 
-    // recarga para que React rehidrate desde localStorage
-    window.location.reload();
+    // ✅ NO recargamos la página (eso rompe la sesión en muchos móviles).
+    // Avisamos a la app para que rehidrate estado desde localStorage.
+    window.dispatchEvent(new CustomEvent("tm_cloud_restored", { detail: { updatedAt: cloudUpdatedAt } }));
   } catch (err) {
     console.error("syncFromCloudOnStartup error:", err);
   }
@@ -249,10 +257,19 @@ export function initCloudSync(): (() => void) | void {
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("focus", onFocus);
 
-  const onBeforeUnload = () => {
+  // ⚠️ beforeunload no es confiable en móviles → agregamos pagehide y hidden
+  const flush = () => {
     uploadLocalBackupToCloud().catch(() => {});
   };
+  const onBeforeUnload = () => flush();
+  const onPageHide = () => flush();
+  const onHidden = () => {
+    if (document.visibilityState === "hidden") flush();
+  };
+
   window.addEventListener("beforeunload", onBeforeUnload);
+  window.addEventListener("pagehide", onPageHide);
+  document.addEventListener("visibilitychange", onHidden);
 
   return () => {
     localStorage.setItem = originalSetItem;
@@ -260,5 +277,7 @@ export function initCloudSync(): (() => void) | void {
     document.removeEventListener("visibilitychange", onVisible);
     window.removeEventListener("focus", onFocus);
     window.removeEventListener("beforeunload", onBeforeUnload);
+    window.removeEventListener("pagehide", onPageHide);
+    document.removeEventListener("visibilitychange", onHidden);
   };
 }

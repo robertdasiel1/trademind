@@ -5,7 +5,7 @@ import {
   Trash2, ChevronDown, ChevronUp, 
   Check, X, Pencil, Star,
   Search, Filter, SlidersHorizontal, Clock, ImageIcon, Save, UploadCloud, Plus,
-  MoveVertical, Hash, ScrollText
+  MoveVertical, Hash, ScrollText, BarChart2, CheckCircle2, XCircle, MinusCircle, LayoutList
 } from 'lucide-react';
 
 interface Props {
@@ -124,25 +124,36 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Lógica de filtrado
   const uniqueAssets = useMemo(() => Array.from(new Set(trades.map(t => t.asset))).sort(), [trades]);
 
-  const filteredTrades = useMemo(() => {
+  // 1. Trades filtrados por Búsqueda y Activo (Base para estadísticas)
+  const tradesBaseFiltered = useMemo(() => {
     return trades.filter(trade => {
-      // Filtro de Texto (Activo o Notas)
       const matchesSearch = 
         trade.asset.toLowerCase().includes(searchTerm.toLowerCase()) || 
         (trade.notes && trade.notes.toLowerCase().includes(searchTerm.toLowerCase()));
       
-      // Filtro de Estado
-      const matchesStatus = statusFilter === 'ALL' || trade.status === statusFilter;
-
-      // Filtro de Activo
       const matchesAsset = assetFilter === 'ALL' || trade.asset === assetFilter;
 
-      return matchesSearch && matchesStatus && matchesAsset;
+      return matchesSearch && matchesAsset;
     });
-  }, [trades, searchTerm, statusFilter, assetFilter]);
+  }, [trades, searchTerm, assetFilter]);
+
+  // 2. Estadísticas calculadas sobre la base (No afectadas por el filtro de estado)
+  const stats = useMemo(() => {
+      const total = tradesBaseFiltered.length;
+      const wins = tradesBaseFiltered.filter(t => t.status === TradeStatus.WIN).length;
+      const losses = tradesBaseFiltered.filter(t => t.status === TradeStatus.LOSS).length;
+      const breakeven = tradesBaseFiltered.filter(t => t.status === TradeStatus.BREAK_EVEN).length;
+      return { total, wins, losses, breakeven };
+  }, [tradesBaseFiltered]);
+
+  // 3. Trades finales para mostrar en la tabla (Afectados por filtro de estado)
+  const filteredTrades = useMemo(() => {
+    return tradesBaseFiltered.filter(trade => {
+      return statusFilter === 'ALL' || trade.status === statusFilter;
+    });
+  }, [tradesBaseFiltered, statusFilter]);
 
   const toggleExpand = (id: string) => {
     setExpandedId(expandedId === id ? null : id);
@@ -240,14 +251,89 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
 
   return (
     <>
-      <div className="mb-6 flex flex-col lg:flex-row justify-between items-start lg:items-center gap-6">
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Clock className="w-6 h-6 text-blue-500" />
-            Historial de Operaciones
-          </h2>
-          <p className="text-slate-500 text-sm">Gestiona y revisa tus trades pasados</p>
+      <div className="mb-6 flex flex-col gap-6">
+        <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+            <div>
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Clock className="w-6 h-6 text-blue-500" />
+                Historial de Operaciones
+              </h2>
+              <p className="text-slate-500 text-sm">Gestiona y revisa tus trades pasados</p>
+            </div>
         </div>
+
+        {/* --- STATS SUMMARY BAR AS FILTERS --- */}
+        {trades.length > 0 && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <button 
+                    onClick={() => setStatusFilter('ALL')}
+                    className={`p-3 rounded-xl flex items-center gap-3 shadow-sm border transition-all duration-200 text-left group ${
+                        statusFilter === 'ALL' 
+                        ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 ring-1 ring-blue-500' 
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700'
+                    }`}
+                >
+                    <div className={`p-2 rounded-lg transition-colors ${statusFilter === 'ALL' ? 'bg-blue-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 group-hover:text-blue-500'}`}>
+                        <LayoutList className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <p className={`text-[10px] font-bold uppercase tracking-wider ${statusFilter === 'ALL' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`}>Total</p>
+                        <p className={`text-lg font-black ${statusFilter === 'ALL' ? 'text-blue-700 dark:text-blue-300' : 'text-slate-900 dark:text-white'}`}>{stats.total}</p>
+                    </div>
+                </button>
+                
+                <button 
+                    onClick={() => setStatusFilter(TradeStatus.WIN)}
+                    className={`p-3 rounded-xl flex items-center gap-3 shadow-sm border transition-all duration-200 text-left group ${
+                        statusFilter === TradeStatus.WIN 
+                        ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-500 ring-1 ring-emerald-500' 
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-300 dark:hover:border-emerald-700'
+                    }`}
+                >
+                    <div className={`p-2 rounded-lg transition-colors ${statusFilter === TradeStatus.WIN ? 'bg-emerald-500 text-white' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white'}`}>
+                        <CheckCircle2 className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <p className={`text-[10px] font-bold uppercase tracking-wider ${statusFilter === TradeStatus.WIN ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>Ganados</p>
+                        <p className={`text-lg font-black ${statusFilter === TradeStatus.WIN ? 'text-emerald-700 dark:text-emerald-300' : 'text-emerald-600 dark:text-emerald-400'}`}>{stats.wins}</p>
+                    </div>
+                </button>
+
+                <button 
+                    onClick={() => setStatusFilter(TradeStatus.LOSS)}
+                    className={`p-3 rounded-xl flex items-center gap-3 shadow-sm border transition-all duration-200 text-left group ${
+                        statusFilter === TradeStatus.LOSS 
+                        ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-500 ring-1 ring-rose-500' 
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-300 dark:hover:border-rose-700'
+                    }`}
+                >
+                    <div className={`p-2 rounded-lg transition-colors ${statusFilter === TradeStatus.LOSS ? 'bg-rose-500 text-white' : 'bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 group-hover:bg-rose-500 group-hover:text-white'}`}>
+                        <XCircle className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <p className={`text-[10px] font-bold uppercase tracking-wider ${statusFilter === TradeStatus.LOSS ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400'}`}>Perdidos</p>
+                        <p className={`text-lg font-black ${statusFilter === TradeStatus.LOSS ? 'text-rose-700 dark:text-rose-300' : 'text-rose-600 dark:text-rose-400'}`}>{stats.losses}</p>
+                    </div>
+                </button>
+
+                <button 
+                    onClick={() => setStatusFilter(TradeStatus.BREAK_EVEN)}
+                    className={`p-3 rounded-xl flex items-center gap-3 shadow-sm border transition-all duration-200 text-left group ${
+                        statusFilter === TradeStatus.BREAK_EVEN 
+                        ? 'bg-slate-100 dark:bg-slate-800 border-slate-400 ring-1 ring-slate-400' 
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-600'
+                    }`}
+                >
+                    <div className={`p-2 rounded-lg transition-colors ${statusFilter === TradeStatus.BREAK_EVEN ? 'bg-slate-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 group-hover:bg-slate-500 group-hover:text-white'}`}>
+                        <MinusCircle className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <p className={`text-[10px] font-bold uppercase tracking-wider ${statusFilter === TradeStatus.BREAK_EVEN ? 'text-slate-600 dark:text-slate-400' : 'text-slate-400'}`}>Break Even</p>
+                        <p className={`text-lg font-black ${statusFilter === TradeStatus.BREAK_EVEN ? 'text-slate-800 dark:text-slate-200' : 'text-slate-700 dark:text-slate-300'}`}>{stats.breakeven}</p>
+                    </div>
+                </button>
+            </div>
+        )}
       </div>
 
       {/* Barra de Filtros */}
@@ -264,44 +350,6 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
             />
           </div>
           <div className="flex flex-wrap gap-2">
-             
-             {/* Custom Status Dropdown */}
-             <div className="relative" ref={statusDropdownRef}>
-               <button 
-                  onClick={() => setIsStatusDropdownOpen(!isStatusDropdownOpen)}
-                  className="flex items-center gap-2 px-4 py-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 hover:border-emerald-500/50 transition-all min-w-[180px] justify-between text-sm font-medium text-slate-600 dark:text-slate-300 shadow-sm"
-               >
-                 <div className="flex items-center gap-2">
-                   <Filter className="w-4 h-4 text-slate-400" />
-                   <span>
-                     {statusFilter === 'ALL' ? 'Todos los Estados' : 
-                      statusFilter === TradeStatus.WIN ? 'Ganadoras' : 
-                      statusFilter === TradeStatus.LOSS ? 'Perdedoras' : 'Break Even'}
-                   </span>
-                 </div>
-                 <ChevronDown className={`w-4 h-4 text-slate-400 transition-transform ${isStatusDropdownOpen ? 'rotate-180' : ''}`} />
-               </button>
-               
-               {isStatusDropdownOpen && (
-                 <div className="absolute top-full left-0 mt-2 w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
-                   {[
-                     { value: 'ALL', label: 'Todos los Estados' },
-                     { value: TradeStatus.WIN, label: 'Ganadoras', color: 'text-emerald-500' },
-                     { value: TradeStatus.LOSS, label: 'Perdedoras', color: 'text-rose-500' },
-                     { value: TradeStatus.BREAK_EVEN, label: 'Break Even', color: 'text-slate-500' }
-                   ].map((opt) => (
-                     <button
-                       key={opt.value}
-                       onClick={() => { setStatusFilter(opt.value as any); setIsStatusDropdownOpen(false); }}
-                       className={`w-full text-left px-4 py-3 text-sm hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center justify-between ${statusFilter === opt.value ? 'bg-slate-50 dark:bg-slate-800 font-bold' : 'text-slate-600 dark:text-slate-300'}`}
-                     >
-                       <span className={opt.color || ''}>{opt.label}</span>
-                       {statusFilter === opt.value && <Check className="w-4 h-4 text-emerald-500" />}
-                     </button>
-                   ))}
-                 </div>
-               )}
-             </div>
              
              {/* Custom Asset Dropdown */}
              <div className="relative" ref={assetDropdownRef}>

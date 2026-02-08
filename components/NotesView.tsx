@@ -1,6 +1,6 @@
 
-import React, { useState, useRef, useMemo } from 'react';
-import { Plus, Trash2, StickyNote, Search, ImageIcon, UploadCloud, X, Hash, Maximize2, Tag, Filter, Pencil, Clock, Calendar, SortDesc, SortAsc, Check, ChevronDown } from 'lucide-react';
+import React, { useState, useRef, useMemo, useEffect } from 'react';
+import { Plus, Trash2, StickyNote, Search, ImageIcon, X, Maximize2, Tag, Filter, Pencil, Clock, Calendar, SortDesc, SortAsc, Check, ChevronDown, Type, FileText, Folder, Book, MoreHorizontal } from 'lucide-react';
 import { GlobalNote } from '../types';
 
 interface Props {
@@ -9,6 +9,7 @@ interface Props {
 }
 
 const PREDEFINED_TAGS = [
+  { label: 'Inbox', color: 'bg-rose-900/40 text-rose-200 border-rose-800' }, // Notion-like Inbox style
   { label: 'Ideas', color: 'bg-blue-500 text-blue-100 dark:bg-blue-500/20 dark:text-blue-300 border-blue-200 dark:border-blue-500/30' },
   { label: 'Recordatorios', color: 'bg-amber-500 text-amber-100 dark:bg-amber-500/20 dark:text-amber-300 border-amber-200 dark:border-amber-500/30' },
   { label: 'Estrategias', color: 'bg-purple-500 text-purple-100 dark:bg-purple-500/20 dark:text-purple-300 border-purple-200 dark:border-purple-500/30' },
@@ -19,17 +20,30 @@ const PREDEFINED_TAGS = [
   { label: 'Backtesting', color: 'bg-slate-500 text-slate-100 dark:bg-slate-500/20 dark:text-slate-300 border-slate-200 dark:border-slate-500/30' },
 ];
 
+// Helper Component for Notion-like Property Row
+const PropertyRow = ({ icon: Icon, label, children, onClick }: { icon: any, label: string, children?: React.ReactNode, onClick?: () => void }) => (
+  <div className="flex items-start py-1.5 gap-4 group">
+    <div className="w-36 flex items-center gap-2 text-slate-500 dark:text-slate-400 text-sm shrink-0 pt-0.5">
+      <Icon className="w-4 h-4" />
+      <span>{label}</span>
+    </div>
+    <div className="flex-1 text-slate-700 dark:text-slate-200 text-sm min-h-[24px] flex items-center flex-wrap gap-1 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-800/50 rounded px-1 -ml-1 transition-colors" onClick={onClick}>
+      {children}
+    </div>
+  </div>
+);
+
 const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
-  const [viewingNote, setViewingNote] = useState<GlobalNote | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   
   // Filter States
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
-  const [activeFilter, setActiveFilter] = useState<string | null>(null); // Tag Filter
-  const [dateFilter, setDateFilter] = useState<string>(''); // Specific Date YYYY-MM-DD
+  const [activeFilter, setActiveFilter] = useState<string | null>(null); 
+  const [dateFilter, setDateFilter] = useState<string>(''); 
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [showTagMenu, setShowTagMenu] = useState(false);
 
   const [fullImage, setFullImage] = useState<string | null>(null);
   
@@ -38,39 +52,53 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
     content: string;
     tags: string[];
     screenshots: string[];
+    date: string;
+    updatedAt?: string;
   }>({
     title: '',
     content: '',
     tags: [],
-    screenshots: []
+    screenshots: [],
+    date: new Date().toISOString()
   });
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const filterRef = useRef<HTMLDivElement>(null);
+  const editorRef = useRef<HTMLDivElement>(null);
+  const tagMenuRef = useRef<HTMLDivElement>(null);
 
   // Close filters when clicking outside
-  React.useEffect(() => {
+  useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (filterRef.current && !filterRef.current.contains(event.target as Node)) {
         setShowFilters(false);
       }
+      if (tagMenuRef.current && !tagMenuRef.current.contains(event.target as Node)) {
+        setShowTagMenu(false);
+      }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [filterRef]);
+  }, []);
+
+  // Sync editor content with formData.content on open
+  useEffect(() => {
+    if (isEditModalOpen && editorRef.current) {
+        editorRef.current.innerHTML = formData.content || '';
+    }
+  }, [isEditModalOpen]); 
 
   const filteredNotes = useMemo(() => {
     return notes.filter(n => {
-      // 1. Search Term
+      if (!n) return false;
+      // Ensure content is string before replace
+      const contentText = (n.content || '').replace(/<[^>]*>?/gm, '');
       const matchesSearch = 
         n.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-        n.content.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        contentText.toLowerCase().includes(searchTerm.toLowerCase()) ||
         (n.tags && n.tags.some(t => t.toLowerCase().includes(searchTerm.toLowerCase())));
       
-      // 2. Tag Filter
       const matchesTag = activeFilter ? n.tags && n.tags.includes(activeFilter) : true;
 
-      // 3. Date Filter
       let matchesDate = true;
       if (dateFilter) {
           const noteDate = new Date(n.date).toISOString().split('T')[0];
@@ -79,7 +107,6 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
 
       return matchesSearch && matchesTag && matchesDate;
     }).sort((a, b) => {
-        // 4. Sorting
         const dateA = new Date(a.date).getTime();
         const dateB = new Date(b.date).getTime();
         return sortOrder === 'newest' ? dateB - dateA : dateA - dateB;
@@ -88,30 +115,37 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
 
   const activeFilterCount = (activeFilter ? 1 : 0) + (dateFilter ? 1 : 0);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      Array.from(files).forEach((file) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (reader.result) {
-            setFormData(prev => ({ 
-                ...prev, 
-                screenshots: [...prev.screenshots, reader.result as string] 
-            }));
-          }
-        };
-        reader.readAsDataURL(file as Blob);
-      });
+  const handlePaste = (e: React.ClipboardEvent<HTMLDivElement>) => {
+    const items = e.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+        if (items[i].type.indexOf("image") !== -1) {
+            e.preventDefault();
+            const blob = items[i].getAsFile();
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                if (event.target?.result) {
+                    const imgTag = `<img src="${event.target.result}" class="max-w-full h-auto rounded-md my-2 border border-slate-200 dark:border-slate-700 shadow-sm block" />&nbsp;<br/>`;
+                    document.execCommand('insertHTML', false, imgTag);
+                }
+            };
+            if (blob) reader.readAsDataURL(blob);
+        }
     }
-    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const removeScreenshot = (index: number) => {
-    setFormData(prev => ({
-        ...prev,
-        screenshots: prev.screenshots.filter((_, i) => i !== index)
-    }));
+  const handleEditorInput = (e: React.FormEvent<HTMLDivElement>) => {
+      // Use editorRef preferentially if available for stability
+      const target = editorRef.current || e.currentTarget;
+      if (target) {
+          setFormData(prev => ({ ...prev, content: target.innerHTML || '' }));
+      }
+  };
+
+  const handleEditorClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'IMG') {
+          setFullImage((target as HTMLImageElement).src);
+      }
   };
 
   const toggleTag = (tag: string) => {
@@ -126,8 +160,18 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
   };
 
   const openNewNoteModal = () => {
+    const now = new Date();
+    // Default title is the formatted date as per request example "11/25/2025"
+    const defaultTitle = now.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+    
     setEditingId(null);
-    setFormData({ title: '', content: '', tags: [], screenshots: [] });
+    setFormData({ 
+        title: defaultTitle, 
+        content: '', 
+        tags: ['Inbox'], // Default status
+        screenshots: [],
+        date: now.toISOString()
+    });
     setIsEditModalOpen(true);
   };
 
@@ -135,51 +179,58 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
     setEditingId(note.id);
     setFormData({
         title: note.title,
-        content: note.content,
+        content: note.content || '',
         tags: note.tags || [],
-        screenshots: note.screenshots || (note.screenshot ? [note.screenshot] : [])
+        screenshots: note.screenshots || (note.screenshot ? [note.screenshot] : []),
+        date: note.date,
+        updatedAt: note.updatedAt
     });
     setIsEditModalOpen(true);
   };
 
-  const handleSaveNote = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.title || !formData.content) return;
+  const handleSaveNote = () => {
+    if (!formData.title) return;
+
+    // Defensive check for editor ref content with safe fallback
+    const finalContent = editorRef.current?.innerHTML ?? formData.content ?? '';
+        
+    const now = new Date().toISOString();
 
     if (editingId) {
-        // Edit Existing
         const updatedNotes = notes.map(n => n.id === editingId ? {
             ...n,
             title: formData.title,
-            content: formData.content,
+            content: finalContent,
             tags: formData.tags,
             screenshots: formData.screenshots,
-            updatedAt: new Date().toISOString()
+            updatedAt: now
         } : n);
         onUpdateNotes(updatedNotes);
     } else {
-        // Create New
         const note: GlobalNote = {
           id: crypto.randomUUID(),
           title: formData.title,
-          content: formData.content,
+          content: finalContent,
           tags: formData.tags,
-          date: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
+          date: formData.date, // Preserve creation time
+          updatedAt: now,
           screenshots: formData.screenshots
         };
         onUpdateNotes([note, ...notes]);
     }
+  };
 
-    setIsEditModalOpen(false);
-    setFormData({ title: '', content: '', tags: [], screenshots: [] });
-    setEditingId(null);
+  // Explicit Save & Close
+  const handleClose = () => {
+      handleSaveNote(); // Auto save on close
+      setIsEditModalOpen(false);
+      setEditingId(null);
   };
 
   const deleteNote = (id: string) => {
     if (confirm('¿Eliminar esta nota permanentemente?')) {
       onUpdateNotes(notes.filter(n => n.id !== id));
-      if (viewingNote?.id === id) setViewingNote(null);
+      if (editingId === id) setIsEditModalOpen(false);
     }
   };
 
@@ -196,6 +247,36 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
       setShowFilters(false);
   };
 
+  const getThumbnail = (note: GlobalNote) => {
+      if (!note) return null;
+      const div = document.createElement('div');
+      div.innerHTML = note.content || '';
+      const img = div.querySelector('img');
+      if (img) return img.src;
+      if (note.screenshots && note.screenshots.length > 0) return note.screenshots[0];
+      if (note.screenshot) return note.screenshot;
+      return null;
+  };
+
+  const getPlainTextSnippet = (html: string) => {
+      const div = document.createElement('div');
+      div.innerHTML = html || '';
+      return div.textContent || div.innerText || "";
+  };
+
+  // Format date like Notion "November 25, 2025 1:25 PM"
+  const formatNotionDate = (isoString: string) => {
+      if (!isoString) return 'Empty';
+      return new Date(isoString).toLocaleString('en-US', {
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: 'numeric',
+          hour12: true
+      });
+  };
+
   return (
     <div className="min-h-full flex flex-col space-y-6">
       {/* Header & Controls */}
@@ -209,7 +290,6 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
         </div>
         
         <div className="flex flex-col md:flex-row w-full xl:w-auto gap-3">
-          {/* Search Bar */}
           <div className="relative flex-1 md:w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
             <input 
@@ -222,7 +302,6 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
           </div>
 
           <div className="flex gap-2">
-            {/* Filter Button */}
             <div className="relative" ref={filterRef}>
                 <button 
                   onClick={() => setShowFilters(!showFilters)}
@@ -242,7 +321,6 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
                   <ChevronDown className={`w-3 h-3 transition-transform ${showFilters ? 'rotate-180' : ''}`} />
                 </button>
 
-                {/* Filter Dropdown Menu */}
                 {showFilters && (
                     <div className="absolute right-0 top-full mt-2 w-[300px] md:w-[350px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl z-20 overflow-hidden animate-in fade-in zoom-in-95 duration-200">
                         <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-950/50">
@@ -253,67 +331,24 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
                                 </button>
                             )}
                         </div>
-                        
                         <div className="p-4 space-y-5 max-h-[60vh] overflow-y-auto custom-scrollbar">
-                            
-                            {/* Sorting */}
                             <div>
                                 <label className="text-xs font-bold text-slate-400 mb-2 block">Orden</label>
                                 <div className="grid grid-cols-2 gap-2">
-                                    <button 
-                                        onClick={() => setSortOrder('newest')}
-                                        className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold border transition-all ${sortOrder === 'newest' ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500'}`}
-                                    >
-                                        <SortDesc className="w-3 h-3" /> Recientes
-                                    </button>
-                                    <button 
-                                        onClick={() => setSortOrder('oldest')}
-                                        className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold border transition-all ${sortOrder === 'oldest' ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500'}`}
-                                    >
-                                        <SortAsc className="w-3 h-3" /> Antiguas
-                                    </button>
+                                    <button onClick={() => setSortOrder('newest')} className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold border transition-all ${sortOrder === 'newest' ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500'}`}><SortDesc className="w-3 h-3" /> Recientes</button>
+                                    <button onClick={() => setSortOrder('oldest')} className={`flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-xs font-bold border transition-all ${sortOrder === 'oldest' ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-500 text-emerald-600 dark:text-emerald-400' : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500'}`}><SortAsc className="w-3 h-3" /> Antiguas</button>
                                 </div>
                             </div>
-
-                            {/* Date Filter */}
                             <div>
-                                <label className="text-xs font-bold text-slate-400 mb-2 block flex items-center gap-1">
-                                    <Calendar className="w-3 h-3" /> Fecha Específica
-                                </label>
-                                <input 
-                                    type="date"
-                                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 outline-none focus:border-emerald-500"
-                                    value={dateFilter}
-                                    onChange={(e) => setDateFilter(e.target.value)}
-                                />
+                                <label className="text-xs font-bold text-slate-400 mb-2 block flex items-center gap-1"><Calendar className="w-3 h-3" /> Fecha Específica</label>
+                                <input type="date" className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm text-slate-700 dark:text-slate-200 outline-none focus:border-emerald-500" value={dateFilter} onChange={(e) => setDateFilter(e.target.value)} />
                             </div>
-
-                            {/* Tag Filter */}
                             <div>
-                                <label className="text-xs font-bold text-slate-400 mb-2 block flex items-center gap-1">
-                                    <Tag className="w-3 h-3" /> Categoría
-                                </label>
+                                <label className="text-xs font-bold text-slate-400 mb-2 block flex items-center gap-1"><Tag className="w-3 h-3" /> Categoría</label>
                                 <div className="flex flex-wrap gap-2">
-                                    <button
-                                        onClick={() => setActiveFilter(null)}
-                                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                                            activeFilter === null
-                                            ? 'bg-slate-800 text-white border-slate-800 dark:bg-white dark:text-slate-900'
-                                            : 'bg-slate-50 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'
-                                        }`}
-                                    >
-                                        Todas
-                                    </button>
+                                    <button onClick={() => setActiveFilter(null)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${activeFilter === null ? 'bg-slate-800 text-white border-slate-800 dark:bg-white dark:text-slate-900' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700'}`}>Todas</button>
                                     {PREDEFINED_TAGS.map(tag => (
-                                        <button
-                                            key={tag.label}
-                                            onClick={() => setActiveFilter(activeFilter === tag.label ? null : tag.label)}
-                                            className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all flex items-center gap-1 ${
-                                                activeFilter === tag.label
-                                                ? 'bg-emerald-500 text-white border-emerald-500 shadow-md'
-                                                : 'bg-slate-50 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                                            }`}
-                                        >
+                                        <button key={tag.label} onClick={() => setActiveFilter(activeFilter === tag.label ? null : tag.label)} className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all flex items-center gap-1 ${activeFilter === tag.label ? 'bg-emerald-500 text-white border-emerald-500 shadow-md' : 'bg-slate-50 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'}`}>
                                             {tag.label}
                                             {activeFilter === tag.label && <Check className="w-3 h-3" />}
                                         </button>
@@ -325,11 +360,7 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
                 )}
             </div>
 
-            {/* New Note Button */}
-            <button 
-                onClick={openNewNoteModal}
-                className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition-all shrink-0"
-            >
+            <button onClick={openNewNoteModal} className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 shadow-lg shadow-emerald-600/20 transition-all shrink-0">
                 <Plus className="w-4 h-4" /> <span className="hidden sm:inline">Nueva</span>
             </button>
           </div>
@@ -338,10 +369,15 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 pb-20">
         {filteredNotes.length > 0 ? (
-          filteredNotes.map(note => (
+          filteredNotes.map(note => {
+            if (!note) return null;
+            const thumbnail = getThumbnail(note);
+            const plainText = getPlainTextSnippet(note.content);
+            return (
             <div 
               key={note.id} 
-              className="group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 hover:shadow-xl hover:border-emerald-500/30 transition-all duration-300 flex flex-col h-[340px]"
+              className="group bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 hover:shadow-xl hover:border-emerald-500/30 transition-all duration-300 flex flex-col h-[340px] cursor-pointer"
+              onClick={() => openEditNoteModal(note)}
             >
               <div className="flex justify-between items-start mb-3">
                  <div className="flex flex-wrap gap-1.5">
@@ -352,64 +388,27 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
                     ))}
                  </div>
                  <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); openEditNoteModal(note); }}
-                        className="p-1.5 text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-lg transition-all"
-                        title="Editar"
-                    >
-                        <Pencil className="w-4 h-4" />
-                    </button>
-                    <button 
-                        onClick={(e) => { e.stopPropagation(); deleteNote(note.id); }}
-                        className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-lg transition-all"
-                        title="Eliminar"
-                    >
-                        <Trash2 className="w-4 h-4" />
-                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); deleteNote(note.id); }} className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-500/10 rounded-lg transition-all" title="Eliminar"><Trash2 className="w-4 h-4" /></button>
                  </div>
               </div>
 
-              <h3 className="font-bold text-slate-900 dark:text-white text-lg mb-2 line-clamp-1 cursor-pointer hover:text-emerald-500 transition-colors" onClick={() => setViewingNote(note)} title={note.title}>{note.title}</h3>
+              <h3 className="font-bold text-slate-900 dark:text-white text-lg mb-2 line-clamp-1 group-hover:text-emerald-500 transition-colors" title={note.title}>{note.title}</h3>
               
-              <div className="flex-1 overflow-hidden relative mb-3 cursor-pointer" onClick={() => setViewingNote(note)}>
-                <p className={`text-sm text-slate-600 dark:text-slate-400 whitespace-pre-wrap ${note.screenshots && note.screenshots.length > 0 ? 'line-clamp-3' : 'line-clamp-6'}`}>
-                  {note.content}
-                </p>
-                {/* Gradient fade for text overflow */}
+              <div className="flex-1 overflow-hidden relative mb-3">
+                <p className={`text-sm text-slate-600 dark:text-slate-400 whitespace-pre-wrap ${thumbnail ? 'line-clamp-3' : 'line-clamp-6'}`}>{plainText}</p>
                 <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-white dark:from-slate-900 to-transparent pointer-events-none"></div>
               </div>
 
-              {/* Thumbnail Display (First Image) */}
-              {note.screenshots && note.screenshots.length > 0 && (
-                <div 
-                    className="relative w-full h-32 mb-3 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 group/img cursor-zoom-in"
-                    onClick={(e) => { e.stopPropagation(); setFullImage(note.screenshots![0]); }}
-                >
+              {thumbnail && (
+                <div className="relative w-full h-32 mb-3 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 group/image">
                     <img 
-                        src={note.screenshots[0]} 
+                        src={thumbnail} 
                         alt="Adjunto" 
-                        className="w-full h-full object-cover transition-transform duration-500 group-hover/img:scale-110" 
-                    />
-                    {note.screenshots.length > 1 && (
-                        <div className="absolute top-2 right-2 bg-black/60 text-white text-[10px] font-bold px-2 py-1 rounded-full backdrop-blur-sm">
-                            +{note.screenshots.length - 1}
-                        </div>
-                    )}
-                    <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/20 transition-colors flex items-center justify-center">
-                        <Maximize2 className="w-6 h-6 text-white opacity-0 group-hover/img:opacity-100 transition-opacity drop-shadow-md" />
-                    </div>
-                </div>
-              )}
-              {/* Fallback for legacy screenshot */}
-              {note.screenshot && (!note.screenshots || note.screenshots.length === 0) && (
-                <div 
-                    className="relative w-full h-32 mb-3 rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 group/img cursor-zoom-in"
-                    onClick={(e) => { e.stopPropagation(); setFullImage(note.screenshot!); }}
-                >
-                    <img 
-                        src={note.screenshot} 
-                        alt="Adjunto" 
-                        className="w-full h-full object-cover transition-transform duration-500 group-hover/img:scale-110" 
+                        className="w-full h-full object-cover transition-transform group-hover/image:scale-105 cursor-zoom-in"
+                        onClick={(e) => {
+                            e.stopPropagation();
+                            setFullImage(thumbnail);
+                        }}
                     />
                 </div>
               )}
@@ -417,242 +416,139 @@ const NotesView: React.FC<Props> = ({ notes, onUpdateNotes }) => {
               <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-800 mt-auto">
                  <div className="flex items-center gap-1.5 text-[10px] text-slate-400">
                     <Clock className="w-3 h-3" />
-                    <span>
-                        {note.updatedAt 
-                            ? new Date(note.updatedAt).toLocaleDateString([], {day: '2-digit', month: '2-digit', year:'2-digit', hour: '2-digit', minute:'2-digit'}) 
-                            : new Date(note.date).toLocaleDateString([], {day: '2-digit', month: '2-digit'})}
-                    </span>
+                    <span>{new Date(note.date).toLocaleDateString([], {day: '2-digit', month: '2-digit'})}</span>
                  </div>
-                {(note.screenshots && note.screenshots.length > 0) || note.screenshot ? (
-                   <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
-                      <ImageIcon className="w-3 h-3" /> Img
-                   </span>
-                ) : (
-                    <span className="text-[10px] text-slate-300 dark:text-slate-600 italic">Texto</span>
-                )}
+                {thumbnail && <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1"><ImageIcon className="w-3 h-3" /> Img</span>}
               </div>
             </div>
-          ))
+          )})
         ) : (
           <div className="col-span-full py-20 text-center text-slate-400">
             <StickyNote className="w-12 h-12 mx-auto mb-4 opacity-50" />
             <p>No se encontraron notas con estos filtros.</p>
-            {(activeFilter || dateFilter || searchTerm) && (
-                <button onClick={clearFilters} className="mt-2 text-emerald-500 font-bold text-sm hover:underline">
-                    Limpiar Filtros
-                </button>
-            )}
+            {(activeFilter || dateFilter || searchTerm) && <button onClick={clearFilters} className="mt-2 text-emerald-500 font-bold text-sm hover:underline">Limpiar Filtros</button>}
           </div>
         )}
       </div>
 
-      {/* VIEW NOTE MODAL (Read Only) */}
-      {viewingNote && (
-          <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-             <div className="bg-white dark:bg-slate-900 w-full max-w-3xl rounded-3xl shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200 overflow-hidden border border-slate-200 dark:border-slate-800">
-                
-                {/* Header */}
-                <div className="p-6 md:p-8 pb-4 border-b border-slate-100 dark:border-slate-800 flex justify-between items-start gap-4">
-                   <div className="flex-1">
-                      <div className="flex flex-wrap gap-2 mb-3">
-                        {viewingNote.tags?.map(t => (
-                           <span key={t} className={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${getTagColor(t)}`}>
-                             {t}
-                           </span>
-                        ))}
-                      </div>
-                      <h2 className="text-2xl md:text-3xl font-bold text-slate-900 dark:text-white leading-tight">
-                         {viewingNote.title}
-                      </h2>
-                      <div className="flex items-center gap-3 mt-3 text-xs text-slate-500 font-medium">
-                         <span className="flex items-center gap-1"><Calendar className="w-3.5 h-3.5" /> {new Date(viewingNote.date).toLocaleDateString(undefined, {weekday:'long', year:'numeric', month:'long', day:'numeric'})}</span>
-                         {viewingNote.updatedAt && (
-                             <span className="flex items-center gap-1"><Clock className="w-3.5 h-3.5" /> Editado: {new Date(viewingNote.updatedAt).toLocaleString()}</span>
-                         )}
-                      </div>
-                   </div>
-                   <button onClick={() => setViewingNote(null)} className="p-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-full transition-colors">
-                      <X className="w-5 h-5 text-slate-500" />
-                   </button>
-                </div>
+      {/* NOTION STYLE MODAL */}
+      {isEditModalOpen && (
+        <div className="fixed inset-0 z-[60] bg-[#191919]/50 dark:bg-black/50 backdrop-blur-sm flex items-center justify-center p-0 md:p-4">
+          <div className="bg-white dark:bg-[#191919] w-full max-w-4xl h-full md:h-[90vh] md:rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            
+            {/* Header / Top Bar Controls */}
+            <div className="h-12 flex items-center justify-between px-4 shrink-0 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
+               <div className="flex items-center gap-2 text-slate-400">
+                  <Maximize2 className="w-4 h-4 cursor-pointer hover:text-slate-200" />
+                  <span className="text-xs text-slate-500">My Trading Journal / {formData.title || 'Untitled'}</span>
+               </div>
+               <div className="flex items-center gap-2">
+                   <button className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-400"><MoreHorizontal className="w-5 h-5" /></button>
+                   <button onClick={handleClose} className="p-1 hover:bg-slate-200 dark:hover:bg-slate-700 rounded text-slate-400"><X className="w-5 h-5" /></button>
+               </div>
+            </div>
 
-                {/* Scrollable Content */}
-                <div className="flex-1 overflow-y-auto p-6 md:p-8 custom-scrollbar">
-                   <div className="prose prose-slate dark:prose-invert max-w-none mb-8 whitespace-pre-wrap leading-relaxed text-base md:text-lg text-slate-700 dark:text-slate-300">
-                      {viewingNote.content}
-                   </div>
+            {/* Main Scrollable Content */}
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+               <div className="max-w-3xl mx-auto px-12 py-10">
+                  
+                  {/* Notion Header Area */}
+                  <div className="group mb-8">
+                      {/* Title */}
+                      <input 
+                          type="text" 
+                          placeholder="Untitled" 
+                          className="w-full text-4xl font-bold bg-transparent border-none px-0 py-2 text-slate-900 dark:text-[#ffffff] focus:ring-0 placeholder:text-slate-300 dark:placeholder:text-slate-600 mb-6"
+                          value={formData.title}
+                          onChange={e => setFormData({...formData, title: e.target.value})}
+                      />
 
-                   {/* Gallery */}
-                   {((viewingNote.screenshots && viewingNote.screenshots.length > 0) || viewingNote.screenshot) && (
-                       <div className="border-t border-slate-100 dark:border-slate-800 pt-6">
-                           <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2"><ImageIcon className="w-4 h-4" /> Galería de Imágenes</h4>
-                           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                              {viewingNote.screenshots?.map((shot, idx) => (
-                                  <div key={idx} className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 cursor-zoom-in bg-slate-100 dark:bg-slate-800" onClick={() => setFullImage(shot)}>
-                                      <img src={shot} alt={`Capture ${idx + 1}`} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                                          <Maximize2 className="w-8 h-8 text-white drop-shadow-md" />
-                                      </div>
-                                  </div>
-                              ))}
-                              {/* Legacy Support */}
-                              {!viewingNote.screenshots && viewingNote.screenshot && (
-                                  <div className="group relative aspect-video rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 cursor-zoom-in bg-slate-100 dark:bg-slate-800" onClick={() => setFullImage(viewingNote.screenshot!)}>
-                                      <img src={viewingNote.screenshot} alt="Capture" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 group-hover:opacity-100">
-                                          <Maximize2 className="w-8 h-8 text-white drop-shadow-md" />
-                                      </div>
+                      {/* Properties Grid */}
+                      <div className="space-y-0.5">
+                          {/* Status / Tags */}
+                          <div className="relative" ref={tagMenuRef}>
+                              <PropertyRow 
+                                icon={Check} 
+                                label="Status" 
+                                onClick={() => setShowTagMenu(!showTagMenu)}
+                              >
+                                  {formData.tags.length > 0 ? (
+                                      formData.tags.map(tag => {
+                                          // Find predefined color or default to inbox style
+                                          const style = PREDEFINED_TAGS.find(t => t.label === tag)?.color || 'bg-slate-700 text-slate-300';
+                                          return (
+                                              <span key={tag} className={`px-2 py-0.5 rounded-sm text-xs border ${style}`}>
+                                                  {tag}
+                                              </span>
+                                          );
+                                      })
+                                  ) : (
+                                      <span className="text-slate-500 text-xs italic">Empty</span>
+                                  )}
+                              </PropertyRow>
+                              
+                              {/* Inline Tag Menu */}
+                              {showTagMenu && (
+                                  <div className="absolute top-8 left-36 z-50 w-48 bg-[#252525] border border-[#373737] rounded-md shadow-xl py-1">
+                                      {PREDEFINED_TAGS.map(tag => (
+                                          <button
+                                              key={tag.label}
+                                              onClick={() => { toggleTag(tag.label); setShowTagMenu(false); }}
+                                              className="w-full text-left px-3 py-1.5 text-xs text-slate-300 hover:bg-[#373737] flex items-center gap-2"
+                                          >
+                                              <div className={`w-2 h-2 rounded-full ${tag.color.split(' ')[0].replace('/40','').replace('/20','')}`}></div>
+                                              {tag.label}
+                                              {formData.tags.includes(tag.label) && <Check className="w-3 h-3 ml-auto" />}
+                                          </button>
+                                      ))}
                                   </div>
                               )}
-                           </div>
-                       </div>
-                   )}
-                </div>
+                          </div>
 
-                {/* Footer Actions */}
-                <div className="p-4 md:p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/50 flex justify-end gap-3">
-                   <button 
-                     onClick={() => {
-                        openEditNoteModal(viewingNote);
-                        setViewingNote(null);
-                     }}
-                     className="flex items-center gap-2 px-5 py-2.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold rounded-xl transition-colors"
-                   >
-                     <Pencil className="w-4 h-4" /> Editar
-                   </button>
-                   <button 
-                     onClick={() => {
-                         deleteNote(viewingNote.id);
-                         setViewingNote(null);
-                     }}
-                     className="flex items-center gap-2 px-5 py-2.5 bg-rose-100 dark:bg-rose-900/20 hover:bg-rose-200 dark:hover:bg-rose-900/40 text-rose-600 dark:text-rose-400 font-bold rounded-xl transition-colors"
-                   >
-                     <Trash2 className="w-4 h-4" /> Eliminar
-                   </button>
-                </div>
-             </div>
-          </div>
-      )}
+                          {/* Notebook (Folder) */}
+                          <PropertyRow icon={Book} label="Notebook">
+                              <div className="flex items-center gap-1.5 text-slate-300 hover:bg-[#2c2c2c] px-1.5 py-0.5 rounded cursor-pointer transition-colors">
+                                  <Book className="w-3 h-3 text-rose-400" />
+                                  <span className="underline decoration-slate-600 underline-offset-2">General Notes</span>
+                              </div>
+                          </PropertyRow>
 
-      {/* Note Modal (Add/Edit) */}
-      {isEditModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-900 w-full max-w-2xl rounded-2xl shadow-2xl flex flex-col max-h-[90vh] animate-in zoom-in-95 duration-200 border border-slate-200 dark:border-slate-800">
-            <div className="p-6 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center">
-               <h3 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                 {editingId ? <Pencil className="w-5 h-5 text-blue-500" /> : <Plus className="w-5 h-5 text-emerald-500" />}
-                 {editingId ? 'Editar Nota' : 'Nueva Nota'}
-               </h3>
-               <button onClick={() => setIsEditModalOpen(false)} className="text-slate-400 hover:text-slate-900 dark:hover:text-white"><X className="w-5 h-5" /></button>
-            </div>
-            
-            <div className="p-6 overflow-y-auto custom-scrollbar">
-              <form id="note-form" onSubmit={handleSaveNote} className="space-y-6">
-                 <div>
-                    <input 
-                        required
-                        autoFocus
-                        type="text" 
-                        placeholder="Título de la nota..." 
-                        className="w-full text-xl font-bold bg-transparent border-b border-slate-200 dark:border-slate-800 px-0 py-2 text-slate-900 dark:text-white focus:ring-0 focus:border-emerald-500 placeholder:text-slate-300 dark:placeholder:text-slate-600"
-                        value={formData.title}
-                        onChange={e => setFormData({...formData, title: e.target.value})}
-                    />
-                 </div>
-                  
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2 flex items-center gap-2"><Tag className="w-3 h-3" /> Categorías</label>
-                    <div className="flex flex-wrap gap-2">
-                       {PREDEFINED_TAGS.map(tag => {
-                         const isSelected = formData.tags.includes(tag.label);
-                         return (
-                           <button
-                             key={tag.label}
-                             type="button"
-                             onClick={() => toggleTag(tag.label)}
-                             className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-all ${
-                               isSelected 
-                                 ? 'bg-emerald-500 text-white border-emerald-500 shadow-md transform scale-105' 
-                                 : 'bg-slate-50 dark:bg-slate-800 text-slate-500 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-700'
-                             }`}
-                           >
-                             {tag.label}
-                           </button>
-                         );
-                       })}
-                    </div>
+                          {/* Type */}
+                          <PropertyRow icon={FileText} label="Type">
+                              <span className="text-slate-500 text-xs">Page</span>
+                          </PropertyRow>
+
+                          {/* Created Time */}
+                          <PropertyRow icon={Clock} label="Created time">
+                              <span className="text-slate-400 text-xs">{formatNotionDate(formData.date)}</span>
+                          </PropertyRow>
+
+                          {/* Last Modified */}
+                          <PropertyRow icon={Calendar} label="Last Modified">
+                              <span className="text-slate-400 text-xs">{formatNotionDate(formData.updatedAt || formData.date)}</span>
+                          </PropertyRow>
+                      </div>
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Contenido</label>
-                    <textarea 
-                      required
-                      rows={8}
-                      placeholder="Escribe tus ideas, análisis o recordatorios..." 
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-4 text-sm text-slate-900 dark:text-white outline-none focus:border-emerald-500 resize-none leading-relaxed"
-                      value={formData.content}
-                      onChange={e => setFormData({...formData, content: e.target.value})}
-                    />
-                  </div>
+                  <hr className="border-slate-200 dark:border-[#2f2f2f] mb-8" />
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-500 uppercase mb-2">Adjuntos</label>
-                    
-                    <div className="space-y-3">
-                        {/* Upload Button */}
-                        <div 
-                            onClick={() => fileInputRef.current?.click()}
-                            className="border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-emerald-500/50 hover:bg-emerald-50/50 dark:hover:bg-emerald-900/10 rounded-xl p-6 transition-all cursor-pointer flex flex-col items-center justify-center gap-2 text-slate-400"
-                        >
-                            <UploadCloud className="w-8 h-8" />
-                            <span className="text-xs font-bold">Click para agregar imágenes</span>
-                            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" multiple onChange={handleFileChange} />
-                        </div>
-
-                        {/* Image Grid */}
-                        {formData.screenshots.length > 0 && (
-                            <div className="grid grid-cols-3 gap-2 animate-in fade-in zoom-in duration-300">
-                                {formData.screenshots.map((shot, index) => (
-                                    <div key={index} className="relative group rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 aspect-square bg-slate-100 dark:bg-slate-800">
-                                        <img src={shot} alt={`Screenshot ${index}`} className="w-full h-full object-cover" />
-                                        <button 
-                                          type="button" 
-                                          onClick={() => removeScreenshot(index)} 
-                                          className="absolute top-1 right-1 p-1 bg-rose-500 text-white rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
-                                          title="Eliminar captura"
-                                        >
-                                          <Trash2 className="w-3 h-3" />
-                                        </button>
-                                    </div>
-                                ))}
-                                <button 
-                                  type="button"
-                                  onClick={() => fileInputRef.current?.click()}
-                                  className="flex items-center justify-center border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 rounded-lg aspect-square text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-500 transition-all"
-                                >
-                                  <Plus className="w-6 h-6" />
-                                </button>
-                            </div>
-                        )}
-                    </div>
+                  {/* Editor */}
+                  <div className="min-h-[400px]">
+                      <div className="text-xs text-slate-400 mb-2 flex items-center gap-2 opacity-0 hover:opacity-100 transition-opacity">
+                          <Type className="w-3 h-3" />
+                          <span>Tip: Press <kbd className="font-mono bg-slate-200 dark:bg-slate-700 px-1 rounded">Ctrl+V</kbd> to paste images inline.</span>
+                      </div>
+                      <div 
+                          ref={editorRef}
+                          contentEditable
+                          onInput={handleEditorInput}
+                          onPaste={handlePaste}
+                          onClick={handleEditorClick}
+                          className="w-full h-full outline-none text-base leading-7 text-slate-800 dark:text-[#d4d4d4] empty:before:content-[attr(data-placeholder)] empty:before:text-slate-500 cursor-text prose prose-slate dark:prose-invert max-w-none"
+                          data-placeholder="Press 'Enter' to continue with an empty page, or start writing..."
+                      />
                   </div>
-              </form>
-            </div>
-            
-            <div className="p-6 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-3 bg-slate-50 dark:bg-slate-900/50 rounded-b-2xl">
-              <button 
-                onClick={() => setIsEditModalOpen(false)}
-                className="px-5 py-2.5 text-slate-500 font-bold hover:bg-slate-200 dark:hover:bg-slate-800 rounded-xl transition-colors"
-              >
-                Cancelar
-              </button>
-              <button 
-                form="note-form"
-                type="submit" 
-                className="px-8 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/20 transition-all transform active:scale-95"
-              >
-                {editingId ? 'Guardar Cambios' : 'Crear Nota'}
-              </button>
+               </div>
             </div>
           </div>
         </div>

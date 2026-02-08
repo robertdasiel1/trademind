@@ -355,8 +355,8 @@ function App() {
   );
 
   const accountTrades = useMemo(
-    () => trades.filter(t => t.accountId === activeAccountId || (!t.accountId && activeAccountId === accounts[0]?.id)),
-    [trades, activeAccountId, accounts]
+    () => trades.filter(t => t.accountId === activeAccountId),
+    [trades, activeAccountId]
   );
 
   const totalProfit = useMemo(() => accountTrades.reduce((acc, t) => acc + t.profit, 0), [accountTrades]);
@@ -482,7 +482,15 @@ function App() {
           />
         );
       case 'add':
-        return <TradeForm onAdd={handleAddTrade} goal={activeAccount.goal} trades={accountTrades} isReal={activeAccount.isReal} />;
+        return (
+          <TradeForm
+            onAdd={handleAddTrade}
+            goal={activeAccount.goal}
+            trades={accountTrades}
+            isReal={activeAccount.isReal}
+            activeAccountId={activeAccountId}
+          />
+        );
       case 'history':
         return <TradeList trades={accountTrades} onDelete={handleDeleteTrade} onUpdate={handleUpdateTrade} goal={activeAccount.goal} isReal={activeAccount.isReal} />;
       case 'calendar':

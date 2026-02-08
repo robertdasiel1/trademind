@@ -21,24 +21,76 @@ function safeParse<T>(value: string): T | null {
 }
 
 /**
- * Keys reales que tu app guarda en localStorage y que queremos sincronizar.
+ * Base keys (sin prefijo), se guardan como:
+ * trading_journal_<userId>_<baseKey>
  */
-const STORAGE_KEYS = [
-  "trading_journal_trades",
-  "trading_journal_global_notes",
-  "trading_journal_accounts",
-  "trading_journal_active_account",
-  "trading_journal_profile",
-  "trading_journal_playbook",
-  "trading_journal_chat_history",
-  "trading_journal_milestones",
+const BASE_STORAGE_KEYS = [
+  "trades",
+  "global_notes",
+  "accounts",
+  "active_account",
+  "profile",
+  "playbook",
+  "chat_history",
+  "milestones",
   "trademind_backup",
 ] as const;
 
-const KEY_LOCAL_LAST_CHANGE = "tm_local_last_change_at";
-const KEY_LOCAL_LAST_HASH = "tm_local_last_hash";
-const KEY_CLOUD_LAST_RESTORE = "tm_cloud_last_restore_at";
-const KEY_SESSION_RESTORE_DONE = "tm_cloud_restore_done";
+/**
+ * Scope actual (userId) para evitar mezclar usuarios.
+ * Lo setea App.tsx con setCloudSyncUserScope(userId).
+ */
+let scopedUserId: string | null = null;
+
+function userPrefix(userId: string): string {
+  return `trading_journal_${userId}_`;
+}
+
+function scopedKey(userId: string, baseKey: string): string {
+  return userPrefix(userId) + baseKey;
+}
+
+export function setCloudSyncUserScope(userId: string) {
+  scopedUserId = userId;
+}
+
+export function clearCloudSyncUserScope() {
+  scopedUserId = null;
+}
+
+function requireUserId(): string {
+  if (!scopedUserId) throw new Error("cloudBackup: user scope not set (userId missing)");
+  return scopedUserId;
+}
+
+export function getUserScopedStorageKeys(userId: string): string[] {
+  return BASE_STORAGE_KEYS.map(k => scopedKey(userId, k));
+}
+
+/**
+ * Meta keys también deben ser por usuario (si no, un restore del user A afecta al user B)
+ */
+function metaKey(userId: string, name: string): string {
+  return `tm_${userId}_${name}`;
+}
+
+export function getUserScopedMetaKeys(userId: string): string[] {
+  return [
+    metaKey(userId, "local_last_change_at"),
+    metaKey(userId, "local_last_hash"),
+    metaKey(userId, "cloud_last_restore_at"),
+    metaKey(userId, "cloud_restore_done"),
+  ];
+}
+
+function getMetaKeys(userId: string) {
+  return {
+    KEY_LOCAL_LAST_CHANGE: metaKey(userId, "local_last_change_at"),
+    KEY_LOCAL_LAST_HASH: metaKey(userId, "local_last_hash"),
+    KEY_CLOUD_LAST_RESTORE: metaKey(userId, "cloud_last_restore_at"),
+    KEY_SESSION_RESTORE_DONE: metaKey(userId, "cloud_restore_done"),
+  } as const;
+}
 
 let isRestoring = false;
 
@@ -57,17 +109,18 @@ function hashString(s: string): string {
   return (h >>> 0).toString(16);
 }
 
-function buildLocalBackupPayload(): { payload: BackupPayload; hash: string } | null {
+function buildLocalBackupPayload(userId: string): { payload: BackupPayload; hash: string } | null {
   const data: Record<string, any> = {};
   let hasAny = false;
 
-  for (const key of STORAGE_KEYS) {
-    const raw = localStorage.getItem(key);
+  for (const baseKey of BASE_STORAGE_KEYS) {
+    const fullKey = scopedKey(userId, baseKey);
+    const raw = localStorage.getItem(fullKey);
     if (raw == null) continue;
 
     hasAny = true;
     const parsed = safeParse<any>(raw);
-    data[key] = parsed ?? raw; // si no parsea, guardamos string
+    data[fullKey] = parsed ?? raw; // guardamos con la key completa (scoped)
   }
 
   if (!hasAny) return null;
@@ -86,11 +139,13 @@ function buildLocalBackupPayload(): { payload: BackupPayload; hash: string } | n
 /**
  * Marca cambio local REAL antes de subir.
  */
-function markLocalChangeIfContentChanged(): void {
+function markLocalChangeIfContentChanged(userId: string): void {
   if (isRestoring) return;
 
-  const built = buildLocalBackupPayload();
+  const built = buildLocalBackupPayload(userId);
   if (!built) return;
+
+  const { KEY_LOCAL_LAST_HASH, KEY_LOCAL_LAST_CHANGE } = getMetaKeys(userId);
 
   const { hash } = built;
   const lastHash = localStorage.getItem(KEY_LOCAL_LAST_HASH);
@@ -112,10 +167,14 @@ export async function fetchCloudBackup(): Promise<CloudBackupRow> {
   return (await res.json()) as CloudBackupRow;
 }
 
-function applyBackupPayloadToLocal(payload: BackupPayload) {
+function applyBackupPayloadToLocal(userId: string, payload: BackupPayload) {
   isRestoring = true;
   try {
     for (const [key, value] of Object.entries(payload.data || {})) {
+      // key ya viene scoped (ej: trading_journal_<userId>_trades)
+      // seguridad extra: no aplicar keys que no correspondan al user
+      if (!key.startsWith(userPrefix(userId))) continue;
+
       if (typeof value === "string") localStorage.setItem(key, value);
       else localStorage.setItem(key, JSON.stringify(value));
     }
@@ -123,13 +182,16 @@ function applyBackupPayloadToLocal(payload: BackupPayload) {
     isRestoring = false;
   }
 
-  // actualiza hash local al contenido restaurado
-  const built = buildLocalBackupPayload();
-  if (built) localStorage.setItem(KEY_LOCAL_LAST_HASH, built.hash);
+  const built = buildLocalBackupPayload(userId);
+  if (built) {
+    const { KEY_LOCAL_LAST_HASH } = getMetaKeys(userId);
+    localStorage.setItem(KEY_LOCAL_LAST_HASH, built.hash);
+  }
 }
 
 export async function uploadLocalBackupToCloud(): Promise<void> {
-  const built = buildLocalBackupPayload();
+  const userId = requireUserId();
+  const built = buildLocalBackupPayload(userId);
   if (!built) return;
 
   const { payload } = built;
@@ -150,8 +212,8 @@ export async function uploadLocalBackupToCloud(): Promise<void> {
     throw new Error(`PUT /api/backup failed (${res.status})`);
   }
 
-  // ✅ CLAVE: si yo acabo de subir, cloud ya tiene mi versión
-  // Esto evita restores repetidos + recargas que se ven como “me saca al login”.
+  const { KEY_CLOUD_LAST_RESTORE, KEY_SESSION_RESTORE_DONE } = getMetaKeys(userId);
+
   localStorage.setItem(KEY_CLOUD_LAST_RESTORE, String(now));
   sessionStorage.setItem(KEY_SESSION_RESTORE_DONE, "1");
 }
@@ -162,7 +224,10 @@ let syncTimer: number | null = null;
 export function scheduleCloudUploadDebounced(delayMs = 1500): void {
   if (isRestoring) return;
 
-  markLocalChangeIfContentChanged();
+  const userId = scopedUserId;
+  if (!userId) return;
+
+  markLocalChangeIfContentChanged(userId);
 
   if (syncTimer) window.clearTimeout(syncTimer);
   syncTimer = window.setTimeout(() => {
@@ -176,6 +241,11 @@ export function scheduleCloudUploadDebounced(delayMs = 1500): void {
  * - y que el último cambio local REAL
  */
 export async function syncFromCloudOnStartup(): Promise<void> {
+  const userId = scopedUserId;
+  if (!userId) return;
+
+  const { KEY_CLOUD_LAST_RESTORE, KEY_SESSION_RESTORE_DONE, KEY_LOCAL_LAST_CHANGE } = getMetaKeys(userId);
+
   try {
     if (sessionStorage.getItem(KEY_SESSION_RESTORE_DONE) === "1") return;
 
@@ -192,25 +262,21 @@ export async function syncFromCloudOnStartup(): Promise<void> {
     const lastRestoreAt = Number(localStorage.getItem(KEY_CLOUD_LAST_RESTORE) ?? 0);
     const localLastChangeAt = Number(localStorage.getItem(KEY_LOCAL_LAST_CHANGE) ?? 0);
 
-    // Si local es más nuevo, NO pises
     if (localLastChangeAt > cloudUpdatedAt) {
       sessionStorage.setItem(KEY_SESSION_RESTORE_DONE, "1");
       return;
     }
 
-    // Si ya restauramos algo igual o más nuevo, no hagas nada
     if (cloudUpdatedAt <= lastRestoreAt) {
       sessionStorage.setItem(KEY_SESSION_RESTORE_DONE, "1");
       return;
     }
 
-    applyBackupPayloadToLocal(cloudPayload);
+    applyBackupPayloadToLocal(userId, cloudPayload);
 
     localStorage.setItem(KEY_CLOUD_LAST_RESTORE, String(cloudUpdatedAt));
     sessionStorage.setItem(KEY_SESSION_RESTORE_DONE, "1");
 
-    // ✅ NO recargamos la página (eso rompe la sesión en muchos móviles).
-    // Avisamos a la app para que rehidrate estado desde localStorage.
     window.dispatchEvent(new CustomEvent("tm_cloud_restored", { detail: { updatedAt: cloudUpdatedAt } }));
   } catch (err) {
     console.error("syncFromCloudOnStartup error:", err);
@@ -227,7 +293,11 @@ export function initCloudSync(): (() => void) | void {
   const originalSetItem = localStorage.setItem.bind(localStorage);
   const originalRemoveItem = localStorage.removeItem.bind(localStorage);
 
-  const shouldSyncKey = (k: string) => (STORAGE_KEYS as readonly string[]).includes(k);
+  const shouldSyncKey = (k: string) => {
+    const userId = scopedUserId;
+    if (!userId) return false;
+    return k.startsWith(userPrefix(userId));
+  };
 
   localStorage.setItem = (key: string, value: string) => {
     originalSetItem(key, value);
@@ -243,6 +313,8 @@ export function initCloudSync(): (() => void) | void {
   syncFromCloudOnStartup().catch(console.error);
 
   const onVisible = () => {
+    if (!scopedUserId) return;
+    const { KEY_SESSION_RESTORE_DONE } = getMetaKeys(scopedUserId);
     if (document.visibilityState === "visible") {
       sessionStorage.removeItem(KEY_SESSION_RESTORE_DONE);
       syncFromCloudOnStartup().catch(console.error);
@@ -250,6 +322,8 @@ export function initCloudSync(): (() => void) | void {
   };
 
   const onFocus = () => {
+    if (!scopedUserId) return;
+    const { KEY_SESSION_RESTORE_DONE } = getMetaKeys(scopedUserId);
     sessionStorage.removeItem(KEY_SESSION_RESTORE_DONE);
     syncFromCloudOnStartup().catch(console.error);
   };
@@ -257,7 +331,6 @@ export function initCloudSync(): (() => void) | void {
   document.addEventListener("visibilitychange", onVisible);
   window.addEventListener("focus", onFocus);
 
-  // ⚠️ beforeunload no es confiable en móviles → agregamos pagehide y hidden
   const flush = () => {
     uploadLocalBackupToCloud().catch(() => {});
   };

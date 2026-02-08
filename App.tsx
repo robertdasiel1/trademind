@@ -17,7 +17,15 @@ import LoginScreen from './components/LoginScreen';
 import { Trade, TradingAccount, GlobalNote, ChatMessage, Playbook, UserProfile } from './types';
 import { Chat } from "@google/genai";
 
-import { syncFromCloudOnStartup, scheduleCloudUploadDebounced, initCloudSync } from "./src/utils/cloudBackup";
+import {
+  syncFromCloudOnStartup,
+  scheduleCloudUploadDebounced,
+  initCloudSync,
+  setCloudSyncUserScope,
+  clearCloudSyncUserScope,
+  getUserScopedStorageKeys,
+  getUserScopedMetaKeys,
+} from "./src/utils/cloudBackup";
 
 function safeReadJSON<T>(key: string, fallback: T): T {
   try {
@@ -46,7 +54,33 @@ const DEFAULT_ACCOUNT: TradingAccount = {
   createdAt: new Date().toISOString()
 };
 
+/**
+ * Nombres base (sin prefijo). Se guardarán como:
+ * trading_journal_<userId>_<baseKey>
+ */
+const BASE_KEYS = {
+  trades: "trades",
+  notes: "global_notes",
+  accounts: "accounts",
+  activeAccount: "active_account",
+  profile: "profile",
+  playbook: "playbook",
+  chat: "chat_history",
+  milestones: "milestones",
+  backup: "trademind_backup",
+} as const;
+
+function buildUserPrefix(userId: string | null): string {
+  const id = userId?.trim();
+  return `trading_journal_${id || "guest"}_`;
+}
+
+function userKey(prefix: string, baseKey: string): string {
+  return prefix + baseKey;
+}
+
 function rehydrateAll(
+  prefix: string,
   setTrades: React.Dispatch<React.SetStateAction<Trade[]>>,
   setNotes: React.Dispatch<React.SetStateAction<GlobalNote[]>>,
   setAccounts: React.Dispatch<React.SetStateAction<TradingAccount[]>>,
@@ -56,15 +90,21 @@ function rehydrateAll(
   setMessages: React.Dispatch<React.SetStateAction<ChatMessage[]>>,
   setAchievedMilestones: React.Dispatch<React.SetStateAction<string[]>>,
 ) {
-  setTrades(safeReadJSON<Trade[]>('trading_journal_trades', []));
-  setNotes(safeReadJSON<GlobalNote[]>('trading_journal_global_notes', []));
-  const a = safeReadJSON<TradingAccount[]>('trading_journal_accounts', []);
+  setTrades(safeReadJSON<Trade[]>(userKey(prefix, BASE_KEYS.trades), []));
+  setNotes(safeReadJSON<GlobalNote[]>(userKey(prefix, BASE_KEYS.notes), []));
+  const a = safeReadJSON<TradingAccount[]>(userKey(prefix, BASE_KEYS.accounts), []);
   setAccounts(a.length ? a : [DEFAULT_ACCOUNT]);
-  setActiveAccountId(localStorage.getItem('trading_journal_active_account') || DEFAULT_ACCOUNT.id);
-  setUserProfile(safeReadJSON<UserProfile>('trading_journal_profile', { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' }));
-  setPlaybook(safeReadJSON<Playbook | null>('trading_journal_playbook', null));
-  setMessages(safeReadJSON<ChatMessage[]>('trading_journal_chat_history', []));
-  setAchievedMilestones(safeReadJSON<string[]>('trading_journal_milestones', []));
+  setActiveAccountId(localStorage.getItem(userKey(prefix, BASE_KEYS.activeAccount)) || DEFAULT_ACCOUNT.id);
+  setUserProfile(
+    safeReadJSON<UserProfile>(userKey(prefix, BASE_KEYS.profile), {
+      name: 'Trader',
+      tradingType: 'Futuros',
+      tradingStyle: 'Day Trading'
+    })
+  );
+  setPlaybook(safeReadJSON<Playbook | null>(userKey(prefix, BASE_KEYS.playbook), null));
+  setMessages(safeReadJSON<ChatMessage[]>(userKey(prefix, BASE_KEYS.chat), []));
+  setAchievedMilestones(safeReadJSON<string[]>(userKey(prefix, BASE_KEYS.milestones), []));
 }
 
 const NavItem = ({
@@ -105,36 +145,28 @@ function App() {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'dark';
   });
 
-  const [trades, setTrades] = useState<Trade[]>(() => safeReadJSON<Trade[]>('trading_journal_trades', []));
-  const [notes, setNotes] = useState<GlobalNote[]>(() => safeReadJSON<GlobalNote[]>('trading_journal_global_notes', []));
-  const [accounts, setAccounts] = useState<TradingAccount[]>(() => {
-    const a = safeReadJSON<TradingAccount[]>('trading_journal_accounts', []);
-    return a.length ? a : [DEFAULT_ACCOUNT];
-  });
-
-  const [activeAccountId, setActiveAccountId] = useState<string>(() =>
-    localStorage.getItem('trading_journal_active_account') || DEFAULT_ACCOUNT.id
-  );
-
-  const [userProfile, setUserProfile] = useState<UserProfile>(() =>
-    safeReadJSON<UserProfile>('trading_journal_profile', { name: 'Trader', tradingType: 'Futuros', tradingStyle: 'Day Trading' })
-  );
-
-  const [playbook, setPlaybook] = useState<Playbook | null>(() =>
-    safeReadJSON<Playbook | null>('trading_journal_playbook', null)
-  );
-
-  const [achievedMilestones, setAchievedMilestones] = useState<string[]>(() =>
-    safeReadJSON<string[]>('trading_journal_milestones', [])
-  );
-
-  const [messages, setMessages] = useState<ChatMessage[]>(() =>
-    safeReadJSON<ChatMessage[]>('trading_journal_chat_history', [])
-  );
-
   // --- AUTH ---
   const [authStatus, setAuthStatus] = useState<'loading' | 'authenticated' | 'unauthenticated'>('loading');
   const [currentUser, setCurrentUser] = useState<{ id: string, username: string, role: string } | null>(null);
+
+  const userPrefix = useMemo(() => buildUserPrefix(currentUser?.id ?? null), [currentUser?.id]);
+  const k = (base: string) => userKey(userPrefix, base);
+
+  const [trades, setTrades] = useState<Trade[]>([]);
+  const [notes, setNotes] = useState<GlobalNote[]>([]);
+  const [accounts, setAccounts] = useState<TradingAccount[]>([DEFAULT_ACCOUNT]);
+
+  const [activeAccountId, setActiveAccountId] = useState<string>(DEFAULT_ACCOUNT.id);
+
+  const [userProfile, setUserProfile] = useState<UserProfile>({
+    name: 'Trader',
+    tradingType: 'Futuros',
+    tradingStyle: 'Day Trading',
+  });
+
+  const [playbook, setPlaybook] = useState<Playbook | null>(null);
+  const [achievedMilestones, setAchievedMilestones] = useState<string[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   const chatSessionRef = useRef<Chat | null>(null);
 
@@ -151,20 +183,6 @@ function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  // PERSIST LOCAL
-  useEffect(() => { localStorage.setItem('trading_journal_trades', JSON.stringify(trades)); }, [trades]);
-  useEffect(() => { localStorage.setItem('trading_journal_global_notes', JSON.stringify(notes)); }, [notes]);
-  useEffect(() => { localStorage.setItem('trading_journal_accounts', JSON.stringify(accounts)); }, [accounts]);
-  useEffect(() => { localStorage.setItem('trading_journal_active_account', activeAccountId); }, [activeAccountId]);
-  useEffect(() => { localStorage.setItem('trading_journal_profile', JSON.stringify(userProfile)); }, [userProfile]);
-  useEffect(() => { localStorage.setItem('sidebar_collapsed', String(sidebarCollapsed)); }, [sidebarCollapsed]);
-  useEffect(() => { localStorage.setItem('trading_journal_chat_history', JSON.stringify(messages)); }, [messages]);
-  useEffect(() => {
-    if (playbook) localStorage.setItem('trading_journal_playbook', JSON.stringify(playbook));
-    else localStorage.removeItem('trading_journal_playbook');
-  }, [playbook]);
-  useEffect(() => { localStorage.setItem('trading_journal_milestones', JSON.stringify(achievedMilestones)); }, [achievedMilestones]);
-
   // ✅ AUTH CHECK
   useEffect(() => {
     const checkAuth = async () => {
@@ -177,6 +195,7 @@ function App() {
         if (!res.ok) {
           setAuthStatus('unauthenticated');
           setCurrentUser(null);
+          clearCloudSyncUserScope();
           return;
         }
 
@@ -188,33 +207,104 @@ function App() {
         } else {
           setAuthStatus('unauthenticated');
           setCurrentUser(null);
+          clearCloudSyncUserScope();
         }
       } catch (e) {
         console.error("Auth check failed", e);
         setAuthStatus('unauthenticated');
         setCurrentUser(null);
+        clearCloudSyncUserScope();
       }
     };
 
     checkAuth();
   }, []);
 
+  // ✅ Cuando autentica o cambia de usuario -> set scope + rehydrate SU data
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
+
+    setCloudSyncUserScope(currentUser.id);
+
+    const prefix = buildUserPrefix(currentUser.id);
+    rehydrateAll(
+      prefix,
+      setTrades,
+      setNotes,
+      setAccounts,
+      setActiveAccountId,
+      setUserProfile,
+      setPlaybook,
+      setMessages,
+      setAchievedMilestones,
+    );
+  }, [authStatus, currentUser?.id]);
+
+  // PERSIST LOCAL (por usuario)
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
+    localStorage.setItem(k(BASE_KEYS.trades), JSON.stringify(trades));
+  }, [authStatus, currentUser?.id, k, trades]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
+    localStorage.setItem(k(BASE_KEYS.notes), JSON.stringify(notes));
+  }, [authStatus, currentUser?.id, k, notes]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
+    localStorage.setItem(k(BASE_KEYS.accounts), JSON.stringify(accounts));
+  }, [authStatus, currentUser?.id, k, accounts]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
+    localStorage.setItem(k(BASE_KEYS.activeAccount), activeAccountId);
+  }, [authStatus, currentUser?.id, k, activeAccountId]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
+    localStorage.setItem(k(BASE_KEYS.profile), JSON.stringify(userProfile));
+  }, [authStatus, currentUser?.id, k, userProfile]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebar_collapsed', String(sidebarCollapsed));
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
+    localStorage.setItem(k(BASE_KEYS.chat), JSON.stringify(messages));
+  }, [authStatus, currentUser?.id, k, messages]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
+    if (playbook) localStorage.setItem(k(BASE_KEYS.playbook), JSON.stringify(playbook));
+    else localStorage.removeItem(k(BASE_KEYS.playbook));
+  }, [authStatus, currentUser?.id, k, playbook]);
+
+  useEffect(() => {
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
+    localStorage.setItem(k(BASE_KEYS.milestones), JSON.stringify(achievedMilestones));
+  }, [authStatus, currentUser?.id, k, achievedMilestones]);
+
   // ✅ INSTALA SYNC SOLO SI ESTÁ AUTH
   useEffect(() => {
-    if (authStatus !== 'authenticated') return;
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
 
     const cleanup = initCloudSync?.();
     return () => {
       if (typeof cleanup === 'function') cleanup();
     };
-  }, [authStatus]);
+  }, [authStatus, currentUser?.id]);
 
   // ✅ Cuando llega restore desde cloud, rehidratamos estado SIN reload
   useEffect(() => {
-    if (authStatus !== 'authenticated') return;
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
 
     const onRestored = () => {
+      const prefix = buildUserPrefix(currentUser.id);
+
       rehydrateAll(
+        prefix,
         setTrades,
         setNotes,
         setAccounts,
@@ -234,14 +324,15 @@ function App() {
 
     window.addEventListener('tm_cloud_restored', onRestored);
     return () => window.removeEventListener('tm_cloud_restored', onRestored);
-  }, [authStatus]);
+  }, [authStatus, currentUser?.id]);
 
   // ✅ PUSH cuando cambian datos (debounced)
   useEffect(() => {
-    if (authStatus !== 'authenticated') return;
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
     scheduleCloudUploadDebounced(1200);
   }, [
     authStatus,
+    currentUser?.id,
     trades,
     notes,
     accounts,
@@ -254,9 +345,9 @@ function App() {
 
   // ✅ PULL inicial extra al autenticar
   useEffect(() => {
-    if (authStatus !== 'authenticated') return;
+    if (authStatus !== 'authenticated' || !currentUser?.id) return;
     syncFromCloudOnStartup().catch(console.error);
-  }, [authStatus]);
+  }, [authStatus, currentUser?.id]);
 
   const activeAccount = useMemo(
     () => accounts.find(a => a.id === activeAccountId) || accounts[0] || DEFAULT_ACCOUNT,
@@ -277,10 +368,21 @@ function App() {
   const handleLogout = async () => {
     try {
       await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
-      setAuthStatus('unauthenticated');
-      setCurrentUser(null);
     } catch (e) {
       console.error("Logout failed", e);
+    } finally {
+      clearCloudSyncUserScope();
+      setAuthStatus('unauthenticated');
+      setCurrentUser(null);
+
+      // limpia estado en memoria (para no “ver” al user anterior)
+      setTrades([]);
+      setNotes([]);
+      setAccounts([DEFAULT_ACCOUNT]);
+      setActiveAccountId(DEFAULT_ACCOUNT.id);
+      setPlaybook(null);
+      setMessages([]);
+      setAchievedMilestones([]);
     }
   };
 
@@ -315,7 +417,36 @@ function App() {
     }
   };
 
-  const handleDeleteAll = () => { localStorage.clear(); window.location.reload(); };
+  // ⚠️ Antes hacía localStorage.clear() (eso borra TODOS los usuarios).
+  // Ahora borra solo el usuario actual.
+  const handleDeleteAll = () => {
+    if (!currentUser?.id) return;
+
+    const scopedKeys = getUserScopedStorageKeys(currentUser.id);
+    const metaKeys = getUserScopedMetaKeys(currentUser.id);
+
+    for (const key of scopedKeys) localStorage.removeItem(key);
+    for (const key of metaKeys) {
+      localStorage.removeItem(key);
+      sessionStorage.removeItem(key);
+    }
+
+    // rehidrata vacío
+    const prefix = buildUserPrefix(currentUser.id);
+    rehydrateAll(
+      prefix,
+      setTrades,
+      setNotes,
+      setAccounts,
+      setActiveAccountId,
+      setUserProfile,
+      setPlaybook,
+      setMessages,
+      setAchievedMilestones,
+    );
+
+    scheduleCloudUploadDebounced(300);
+  };
 
   const handleAddAccount = (acc: TradingAccount) => { setAccounts(prev => [...prev, acc]); setActiveAccountId(acc.id); };
   const handleUpdateAccount = (updated: TradingAccount) => setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a));
@@ -392,7 +523,12 @@ function App() {
           setAuthStatus('authenticated');
           fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
             .then(r => r.json())
-            .then(d => { if (d.user) setCurrentUser(d.user); })
+            .then(d => {
+              if (d.user) {
+                setCurrentUser(d.user);
+                setCloudSyncUserScope(d.user.id);
+              }
+            })
             .catch(console.error);
         }}
         onUpdateProfile={setUserProfile}

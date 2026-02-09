@@ -707,7 +707,7 @@ export const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, i
                       </tr>
                     )}
                   </React.Fragment>
-                )}})}
+                )})}
               </tbody>
             </table>
           </div>

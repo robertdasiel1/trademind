@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   LayoutDashboard, ListPlus, Calendar, StickyNote, History,
-  BrainCircuit, Settings, Sun, Moon, ChevronLeft, ChevronRight,
+  BrainCircuit, Settings, Sun, Moon, Eclipse, ChevronLeft, ChevronRight,
   LogOut, Loader2
 } from 'lucide-react';
 
@@ -139,10 +139,10 @@ const NavItem = ({
 );
 
 function App() {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+  const [theme, setTheme] = useState<'light' | 'dark' | 'midnight'>(() => {
     const saved = localStorage.getItem('theme');
-    if (saved === 'dark' || saved === 'light') return saved;
-    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'dark';
+    if (saved === 'dark' || saved === 'light' || saved === 'midnight') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
 
   // --- AUTH ---
@@ -178,8 +178,14 @@ function App() {
   // THEME
   useEffect(() => {
     const root = window.document.documentElement;
-    if (theme === 'dark') root.classList.add('dark');
-    else root.classList.remove('dark');
+
+    // light: sin clases
+    // dark: .dark
+    // midnight: .dark + .midnight
+    const isDark = theme === 'dark' || theme === 'midnight';
+    root.classList.toggle('dark', isDark);
+    root.classList.toggle('midnight', theme === 'midnight');
+
     localStorage.setItem('theme', theme);
   }, [theme]);
 
@@ -362,7 +368,8 @@ function App() {
   const totalProfit = useMemo(() => accountTrades.reduce((acc, t) => acc + t.profit, 0), [accountTrades]);
   const progressPercentage = Math.min(100, Math.max(0, (totalProfit / activeAccount.goal) * 100));
 
-  const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  const toggleTheme = () =>
+    setTheme(prev => (prev === 'light' ? 'dark' : prev === 'dark' ? 'midnight' : 'light'));
   const changeTab = (tab: string) => setActiveTab(tab);
 
   const handleLogout = async () => {
@@ -474,7 +481,7 @@ function App() {
             trades={accountTrades}
             account={activeAccount}
             deadline={activeAccount.deadline || ""}
-            theme={theme}
+            theme={theme === 'midnight' ? 'dark' : theme}
             accounts={accounts}
             activeAccountId={activeAccountId}
             onSwitchAccount={handleSwitchAccount}
@@ -559,7 +566,13 @@ function App() {
 
           <div className="flex md:hidden gap-2">
             <button onClick={toggleTheme} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
-              {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              {theme === 'light' ? (
+                <Sun className="w-5 h-5" />
+              ) : theme === 'dark' ? (
+                <Moon className="w-5 h-5" />
+              ) : (
+                <Eclipse className="w-5 h-5" />
+              )}
             </button>
             <button onClick={() => setShowSettings(true)} className="p-2 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg">
               <Settings className="w-5 h-5" />
@@ -588,7 +601,13 @@ function App() {
           </button>
 
           <button onClick={toggleTheme} className={`flex items-center gap-3 px-3 py-3 rounded-xl transition-all text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 ${sidebarCollapsed ? 'justify-center' : ''}`} title="Cambiar Modo">
-            {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+            {theme === 'light' ? (
+                <Sun className="w-5 h-5" />
+              ) : theme === 'dark' ? (
+                <Moon className="w-5 h-5" />
+              ) : (
+                <Eclipse className="w-5 h-5" />
+              )}
             <span className={`font-medium whitespace-nowrap transition-all duration-300 ${sidebarCollapsed ? 'w-0 opacity-0 hidden' : 'w-auto opacity-100'}`}>Modo</span>
           </button>
 

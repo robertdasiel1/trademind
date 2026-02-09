@@ -14,7 +14,12 @@ body {
 }
 
 .dark body {
-    background-color: #020617; /* slate-950 */
+    background-color: #020617; /* slate-950 (dark azulado) */
+}
+
+/* MIDNIGHT: OLED / Lights Out (negro puro) */
+.dark.midnight body {
+    background-color: #000000; /* negro puro */
 }
 
 /* Ocultar barra de scroll pero permitir funcionalidad */
@@ -48,4 +53,45 @@ body {
 
 .animate-pulse-subtle {
     animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* =========================
+   MIDNIGHT (OLED / Lights Out)
+   Requiere: <html class="dark midnight">
+   Objetivo: reemplazar los slate azulados por negros neutros.
+========================= */
+
+/* Fondo global (por si algún contenedor no usa clases tailwind) */
+.dark.midnight,
+.dark.midnight body,
+.dark.midnight #root {
+  background-color: #000000;
+}
+
+/* Override de fondos Tailwind usados en la app (dark:bg-slate-*) */
+.dark.midnight .dark\:bg-slate-950 {
+  background-color: #000000 !important;
+}
+
+.dark.midnight .dark\:bg-slate-900,
+.dark.midnight .dark\:bg-slate-800,
+.dark.midnight .dark\:bg-slate-700 {
+  background-color: #121212 !important;
+}
+
+/* Hovers comunes que se veían azulados */
+.dark.midnight .dark\:hover\:bg-slate-800:hover,
+.dark.midnight .dark\:hover\:bg-slate-900:hover {
+  background-color: #121212 !important;
+}
+
+/* Bordes menos azulados */
+.dark.midnight .dark\:border-slate-800,
+.dark.midnight .dark\:border-slate-700 {
+  border-color: #1f1f1f !important;
+}
+
+/* Extra: si todavía tienes clases hardcodeadas tipo bg-[#020617] */
+.dark.midnight .bg-\[\#020617\] {
+  background-color: #000000 !important;
 }

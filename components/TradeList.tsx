@@ -951,3 +951,5 @@ export const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, i
     </>
   );
 };
+
+export default TradeList;

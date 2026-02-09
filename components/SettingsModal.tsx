@@ -244,28 +244,29 @@ const SettingsModal: React.FC<Props> = ({
      reader.readAsText(file);
   };
 
-  const handleCsvImport = (e: React.ChangeEvent<HTMLInputElement>) => {
-   const file = e.target.files?.[0];
-   if (!file) return;
-   const reader = new FileReader();
-   reader.onload = (ev) => {
-       try {
-           const newTrades = parseNinjaTraderCSV(ev.target?.result as string)
-             .map(t => ({ ...t, accountId: activeAccountId }));
+ const handleCsvImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
 
-           if (newTrades.length > 0) {
-             onImport({trades: newTrades});
-             alert(`✓ Se importaron ${newTrades.length} trades consolidados (Ciclos Flat-to-Flat). Recargando...`);
-             setTimeout(() => window.location.reload(), 1000);
-           } else alert("⚠ No se encontraron operaciones cerradas válidas en el CSV.");
-       } catch (err) { 
-           console.error(err);
-           alert('❌ Error leyendo CSV'); 
-       }
-   };
-   reader.readAsText(file);
-};
+  reader.onload = (ev) => {
+    try {
+      const newTrades = parseNinjaTraderCSV(ev.target?.result as string)
+        .map(t => ({ ...t, accountId: activeAccountId }));
+
+      if (newTrades.length > 0) {
+        onImport({ trades: newTrades });
+        alert(`✓ Se importaron ${newTrades.length} trades consolidados (Ciclos Flat-to-Flat). Recargando...`);
+        setTimeout(() => window.location.reload(), 1000);
+      } else alert("⚠ No se encontraron operaciones cerradas válidas en el CSV.");
+    } catch (err) {
+      console.error(err);
+      alert('❌ Error leyendo CSV');
+    }
   };
+
+  reader.readAsText(file);
+};
 
   const handleExport = async () => {
       const data = { version: 2, timestamp: new Date().toISOString(), userProfile, accounts, trades, notes, aiMessages, playbook, achievedMilestones, activeAccountId };

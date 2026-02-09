@@ -1,16 +1,19 @@
 
 import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { Trade, TradeStatus, TradingAccount, UserProfile } from '../types';
+import { Trade, TradeStatus, TradingAccount, UserProfile, TradeDirection } from '../types';
 import { 
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, BarChart, Bar, ReferenceLine
+  PieChart, Pie, Cell, BarChart, Bar, ReferenceLine, ScatterChart, Scatter
 } from 'recharts';
 import { 
   TrendingUp, Award, BarChart3, Layers, AlertCircle, ShieldAlert, 
   Share2, Loader2, Target, Trophy, Skull, ShieldCheck, ChevronDown, 
   Briefcase, Check, Plus, Settings, Quote, Sparkles, Activity, 
-  TrendingDown, RefreshCw, Rocket, Share, CalendarDays, Wallet, Calendar, Filter, X
+  TrendingDown, RefreshCw, Rocket, Share, CalendarDays, Wallet, Calendar, Filter, X, Crosshair,
+  BrainCircuit
 } from 'lucide-react';
+import html2canvas from 'html2canvas';
+
 interface Props {
   trades: Trade[];
   account: TradingAccount;
@@ -20,6 +23,7 @@ interface Props {
   activeAccountId: string;
   onSwitchAccount: (id: string) => void;
   userProfile: UserProfile;
+  isPrivacyMode?: boolean;
 }
 
 const MOTIVATIONAL_QUOTES = [
@@ -37,14 +41,26 @@ const MOTIVATIONAL_QUOTES = [
 
 type DateRangeType = 'today' | 'week' | 'month' | 'all' | 'custom';
 
+// Helper Global para determinar la FECHA DE SESIÓN (Coincidente con CalendarView)
+const getSessionDateStr = (dateStr: string): string => {
+    const d = new Date(dateStr);
+    if (d.getHours() >= 18) {
+      d.setDate(d.getDate() + 1);
+    }
+    // Formato Local YYYY-MM-DD
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
 const Dashboard: React.FC<Props> = ({ 
-  trades, account, deadline, theme, accounts, activeAccountId, onSwitchAccount, userProfile
+  trades, account, deadline, theme, accounts, activeAccountId, onSwitchAccount, userProfile, isPrivacyMode = false
 }) => {
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [isGeneratingShare, setIsGeneratingShare] = useState(false);
   const [showAccountMenu, setShowAccountMenu] = useState(false);
   
-  // Date Range State
   const [dateRange, setDateRange] = useState<DateRangeType>('all');
   const [showDateMenu, setShowDateMenu] = useState(false);
   const [customRange, setCustomRange] = useState({ start: '', end: '' });
@@ -81,45 +97,42 @@ const Dashboard: React.FC<Props> = ({
       return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // --- FILTER TRADES BY DATE RANGE ---
+  // --- FILTER TRADES BY SESSION DATE KEY ---
   const filteredTrades = useMemo(() => {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const today = new Date();
+    const todayKey = getSessionDateStr(today.toISOString());
 
     return trades.filter(t => {
-        const tDate = new Date(t.date).getTime();
+        const tradeSessionKey = getSessionDateStr(t.date);
         
         if (dateRange === 'all') return true;
         
-        if (dateRange === 'today') return tDate >= todayStart;
+        if (dateRange === 'today') {
+            return tradeSessionKey === todayKey;
+        }
         
         if (dateRange === 'week') {
-             // Start of current week (Monday)
-             const day = now.getDay();
-             const diff = now.getDate() - day + (day === 0 ? -6 : 1); 
-             const monday = new Date(now.setDate(diff));
-             monday.setHours(0,0,0,0);
-             return tDate >= monday.getTime();
+             // Simplificación: últimos 7 días
+             const d = new Date(t.date);
+             const diff = (today.getTime() - d.getTime()) / (1000 * 3600 * 24);
+             return diff <= 7;
         }
         
         if (dateRange === 'month') {
-             // Start of current month
-             const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-             return tDate >= startOfMonth;
+             // Mismo mes calendario basado en la fecha de sesión
+             const tradeDate = new Date(tradeSessionKey + "T12:00:00");
+             return tradeDate.getMonth() === today.getMonth() && tradeDate.getFullYear() === today.getFullYear();
         }
         
         if (dateRange === 'custom') {
             if (!customRange.start) return true;
-            const start = new Date(customRange.start).getTime();
-            const end = customRange.end ? new Date(customRange.end).getTime() + 86400000 : Infinity; 
-            return tDate >= start && tDate < end;
+            return tradeSessionKey >= customRange.start && (!customRange.end || tradeSessionKey <= customRange.end);
         }
         return true;
     });
   }, [trades, dateRange, customRange]);
 
   // --- STATS CALCULATION ---
-  // 1. GLOBAL STATS (For Account Health / Cushion - unaffected by filters)
   const globalProfit = useMemo(() => trades.reduce((acc, t) => acc + t.profit, 0), [trades]);
   const currentBalance = account.initialBalance + globalProfit;
   
@@ -127,7 +140,7 @@ const Dashboard: React.FC<Props> = ({
   const currentCushion = currentBalance - liquidationLevel;
   const displayHealth = (currentCushion / account.maxDrawdownLimit) * 100;
 
-  // 2. FILTERED STATS (For Charts & KPIs)
+  // Sorted by Execution Time for Curves
   const sortedTrades = useMemo(() => [...filteredTrades].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()), [filteredTrades]);
 
   const stats = useMemo(() => {
@@ -137,11 +150,9 @@ const Dashboard: React.FC<Props> = ({
     const losses = sortedTrades.filter(t => t.profit < 0).length;
     const winRate = totalTrades > 0 ? (wins / totalTrades) * 100 : 0;
     
-    // Best & Worst Trade
     const bestTrade = sortedTrades.reduce((max, t) => t.profit > max ? t.profit : max, 0);
     const worstTrade = sortedTrades.reduce((min, t) => t.profit < min ? t.profit : min, 0);
 
-    // Days Remaining (Static)
     const today = new Date();
     const deadlineDate = new Date(deadline);
     const timeDiff = deadlineDate.getTime() - today.getTime();
@@ -150,44 +161,111 @@ const Dashboard: React.FC<Props> = ({
     return { profit, totalTrades, wins, losses, winRate, bestTrade, worstTrade, daysRemaining };
   }, [sortedTrades, deadline]);
 
-  // Chart Data: Capital Curve (Relative to period start or cumulative? Usually relative for filtered view)
+  // --- ADVANCED LONG TERM STATS ---
+  const advancedStats = useMemo(() => {
+    const wins = sortedTrades.filter(t => t.profit > 0);
+    const losses = sortedTrades.filter(t => t.profit < 0);
+
+    const grossProfit = wins.reduce((acc, t) => acc + t.profit, 0);
+    const grossLoss = Math.abs(losses.reduce((acc, t) => acc + t.profit, 0));
+
+    const profitFactor = grossLoss === 0 ? (grossProfit > 0 ? 100 : 0) : grossProfit / grossLoss;
+    
+    // Expectancy per trade (Net Profit / Total Trades)
+    const expectancy = sortedTrades.length > 0 ? stats.profit / sortedTrades.length : 0;
+
+    // Project frequency (trades per day)
+    let tradesPerDay = 0;
+    if (sortedTrades.length > 1) {
+        const first = new Date(sortedTrades[0].date).getTime();
+        const last = new Date(sortedTrades[sortedTrades.length - 1].date).getTime();
+        const days = Math.max(1, (last - first) / (1000 * 3600 * 24));
+        tradesPerDay = sortedTrades.length / days;
+    }
+
+    // 6 Month projection (approx 120 trading days)
+    const projected6Months = expectancy * (tradesPerDay || 0.5) * 20 * 6; // Fallback to 0.5 trades/day if no data
+
+    return {
+        profitFactor,
+        expectancy,
+        grossProfit,
+        grossLoss,
+        projected6Months,
+        tradesPerDay,
+        avgWin: wins.length > 0 ? grossProfit / wins.length : 0,
+        avgLoss: losses.length > 0 ? grossLoss / losses.length : 0
+    };
+  }, [sortedTrades, stats.profit]);
+
+  // --- R-MULTIPLE DATA PREPARATION ---
+  const rMultipleData = useMemo(() => {
+    return sortedTrades
+        .filter(t => t.stopLoss && t.stopLoss !== 0 && t.entryPrice !== t.stopLoss)
+        .map((t, i) => {
+            const risk = Math.abs(t.entryPrice - t.stopLoss!);
+            // Evitar divisiones locas si el SL está pegado a la entrada por error de redondeo
+            if (risk < 0.00001) return null;
+            
+            let reward = 0;
+            if (t.direction === TradeDirection.LONG) {
+                reward = t.exitPrice - t.entryPrice;
+            } else {
+                reward = t.entryPrice - t.exitPrice;
+            }
+            
+            // R = Reward / Risk
+            const r = reward / risk;
+            
+            return {
+                id: t.id,
+                index: i + 1,
+                r: parseFloat(r.toFixed(2)),
+                asset: t.asset,
+                date: new Date(t.date).toLocaleDateString([], { month: '2-digit', day: '2-digit' }),
+                result: t.profit
+            };
+        })
+        .filter(item => item !== null);
+  }, [sortedTrades]);
+
   const capitalData = useMemo(() => {
-    let runningBalance = 0; // Starts at 0 for the selected period P/L view
+    let runningBalance = 0;
     return sortedTrades.map(t => {
       runningBalance += t.profit;
+      // Para la gráfica visual, usamos MM/DD del session key
+      const sessionKey = getSessionDateStr(t.date);
+      const [y, m, d] = sessionKey.split('-');
       return {
-        name: new Date(t.date).toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' }),
+        name: `${m}/${d}`,
         value: runningBalance,
         profit: t.profit
       };
     });
   }, [sortedTrades]);
 
-  // Calculate Gradient Offset
   const gradientOffset = () => {
     if (capitalData.length === 0) return 0;
     const dataMax = Math.max(...capitalData.map((i) => i.value));
     const dataMin = Math.min(...capitalData.map((i) => i.value));
-  
     if (dataMax <= 0) return 0;
     if (dataMin >= 0) return 1;
-  
     return dataMax / (dataMax - dataMin);
   };
   
   const off = gradientOffset();
 
-  // Chart Data: Daily Performance
   const dailyData = useMemo(() => {
       const map: Record<string, number> = {};
       sortedTrades.forEach(t => {
-          const day = new Date(t.date).toLocaleDateString(undefined, { day: '2-digit', month: '2-digit' });
-          map[day] = (map[day] || 0) + t.profit;
+          const sessionKey = getSessionDateStr(t.date);
+          const [y, m, d] = sessionKey.split('-');
+          const dayLabel = `${m}/${d}`;
+          map[dayLabel] = (map[dayLabel] || 0) + t.profit;
       });
       return Object.entries(map).map(([name, value]) => ({ name, value }));
   }, [sortedTrades]);
 
-  // Chart Data: Asset Performance
   const assetData = useMemo(() => {
       const map: Record<string, number> = {};
       sortedTrades.forEach(t => {
@@ -196,13 +274,11 @@ const Dashboard: React.FC<Props> = ({
       return Object.entries(map).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value);
   }, [sortedTrades]);
 
-  // Chart Data: Distribution
   const pieData = [
       { name: 'Ganados', value: stats.wins, color: '#10b981' },
       { name: 'Perdidos', value: stats.losses, color: '#f43f5e' }
   ];
 
-  // Dynamic Chart Styles based on Theme
   const chartStyles = useMemo(() => {
      const isDark = theme === 'dark';
      return {
@@ -220,129 +296,36 @@ const Dashboard: React.FC<Props> = ({
   }, [theme]);
 
   const handleShare = async () => {
+      if (!dashboardRef.current) return;
       setIsGeneratingShare(true);
-
       try {
-          // 1) Load the share template from /public
-          const res = await fetch('/share-template.png');
-          if (!res.ok) throw new Error('No se pudo cargar el template para compartir');
-          const templateBlob = await res.blob();
-
-          // 2) Convert template to an Image we can draw on a canvas
-          const templateUrl = URL.createObjectURL(templateBlob);
-          const img = new Image();
-          img.crossOrigin = 'anonymous';
-          img.src = templateUrl;
-
-          await new Promise<void>((resolve, reject) => {
-              img.onload = () => resolve();
-              img.onerror = () => reject(new Error('No se pudo cargar la imagen del template'));
+          const canvas = await html2canvas(dashboardRef.current, {
+              backgroundColor: theme === 'dark' ? '#0f172a' : '#f8fafc',
+              scale: 2
           });
-
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          if (!ctx) throw new Error('No se pudo crear el canvas');
-
-          const W = img.naturalWidth || img.width;
-          const H = img.naturalHeight || img.height;
-          canvas.width = W;
-          canvas.height = H;
-
-          // Draw base template
-          ctx.drawImage(img, 0, 0, W, H);
-          URL.revokeObjectURL(templateUrl);
-
-          // 3) Build dynamic values (daily P/L and meta)
-          const now = new Date();
-          const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-          const endOfDay = startOfDay + 24 * 60 * 60 * 1000;
-
-          const todayProfit = trades
-              .filter(t => {
-                  const ts = new Date(t.date).getTime();
-                  return ts >= startOfDay && ts < endOfDay;
-              })
-              .reduce((acc, t) => acc + t.profit, 0);
-
-          // Optional: % return (kept for the share text, even though the image shows $ PnL)
-          const todayReturnPct = account.initialBalance > 0
-              ? (todayProfit / account.initialBalance) * 100
-              : 0;
-
-          const usd = new Intl.NumberFormat('en-US', {
-              style: 'currency',
-              currency: 'USD',
-              minimumFractionDigits: 2,
-              maximumFractionDigits: 2,
+          canvas.toBlob(async (blob) => {
+              if (!blob) return;
+              const file = new File([blob], 'trading-dashboard.png', { type: 'image/png' });
+              if (navigator.share && navigator.canShare({ files: [file] })) {
+                  try {
+                      await navigator.share({
+                          title: 'Mi Progreso en TradeMind',
+                          text: `He completado ${stats.totalTrades} trades con un Win Rate de ${stats.winRate.toFixed(1)}%.`,
+                          files: [file]
+                      });
+                      setShareFeedback('¡Compartido!');
+                  } catch (e) { console.log('Share cancelled'); }
+              } else {
+                  const link = document.createElement('a');
+                  link.href = URL.createObjectURL(blob);
+                  link.download = 'trading-dashboard.png';
+                  link.click();
+                  setShareFeedback('Imagen descargada');
+              }
           });
-
-          // Main number on the image: Net PnL in $ (green if positive, red if negative)
-          const pnlText = `${todayProfit >= 0 ? '+' : '-'}${usd.format(Math.abs(todayProfit))}`;
-          const pctText = `${todayReturnPct >= 0 ? '+' : ''}${todayReturnPct.toFixed(2)}%`;
-
-          const nicknameValue = userProfile.username || userProfile.name || 'Trader';
-          const brokerValue = account.broker || 'Broker';
-          const pad2 = (n: number) => String(n).padStart(2, '0');
-          const shareTimeValue = `${pad2(now.getMonth() + 1)}/${pad2(now.getDate())}/${now.getFullYear()} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
-
-          // 4) Draw dynamic text on top of the template
-          // Gain (big, centered)
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          ctx.fillStyle = todayProfit >= 0 ? '#10b981' : '#ef4444';
-          ctx.font = `800 ${Math.round(H * 0.08)}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-          ctx.fillText(pnlText, W * 0.5, H * 0.255);
-
-          // Bottom fields (right aligned values)
-          ctx.textAlign = 'right';
-          ctx.fillStyle = '#0f172a';
-          ctx.font = `700 ${Math.round(H * 0.028)}px Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif`;
-
-          const valueX = W * 0.92;
-          ctx.fillText(nicknameValue, valueX, H * 0.78);
-          ctx.fillText(shareTimeValue, valueX, H * 0.835);
-          ctx.fillText(brokerValue, valueX, H * 0.89);
-
-          // 5) Canvas -> File -> Share/Download
-          const finalBlob: Blob = await new Promise((resolve, reject) => {
-              canvas.toBlob((b) => {
-                  if (!b) reject(new Error('No se pudo generar la imagen final'));
-                  else resolve(b);
-              }, 'image/png');
-          });
-
-          const file = new File([finalBlob], 'progreso.png', { type: 'image/png' });
-
-          const canShareFiles =
-              !!navigator.share &&
-              !!navigator.canShare &&
-              navigator.canShare({ files: [file] });
-
-          if (canShareFiles) {
-              await navigator.share({
-                  title: 'Mi Progreso en TradeMind',
-                  text: `Hoy: ${pnlText} (${pctText}) • Trades: ${stats.totalTrades} • WinRate: ${stats.winRate.toFixed(1)}%`,
-                  files: [file]
-              });
-              setShareFeedback('¡Compartido!');
-          } else {
-              const url = URL.createObjectURL(finalBlob);
-              const link = document.createElement('a');
-              link.href = url;
-              link.download = 'progreso.png';
-              link.click();
-              URL.revokeObjectURL(url);
-              setShareFeedback('Imagen descargada');
-          }
-      } catch (err) {
-          console.error(err);
-          setShareFeedback('Error');
-      } finally {
-          setIsGeneratingShare(false);
-          setTimeout(() => setShareFeedback(null), 3000);
-      }
+      } catch (err) { setShareFeedback('Error'); } 
+      finally { setIsGeneratingShare(false); setTimeout(() => setShareFeedback(null), 3000); }
   };
-
 
   const getDateRangeLabel = () => {
       switch(dateRange) {
@@ -359,18 +342,17 @@ const Dashboard: React.FC<Props> = ({
       
       {/* 1. HEADER "CENTRO DE MANDO" */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 text-slate-900 dark:text-white shadow-xl border border-slate-200 dark:border-slate-800 relative z-20 transition-colors duration-300">
+          {/* ... existing header code ... */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-10 items-center">
               
-              {/* Left Column: Title & Health */}
               <div className="flex flex-col justify-center">
                   <h1 className="text-3xl font-black tracking-tight mb-2">Centro de Mando</h1>
                   <div className="flex items-center gap-4 text-sm font-medium text-slate-500 dark:text-slate-400 mb-4">
                       <span>Objetivo: <span className="text-emerald-600 dark:text-emerald-400 font-bold">${account.goal.toLocaleString()}</span></span>
                       <span>•</span>
-                      <span>Colchón: <span className="text-slate-900 dark:text-white font-bold">${currentCushion.toLocaleString()}</span></span>
+                      <span>Colchón: <span className="text-slate-900 dark:text-white font-bold">{isPrivacyMode ? '****' : `$${currentCushion.toLocaleString()}`}</span></span>
                   </div>
                   
-                  {/* Health Bar */}
                   <div className="w-full max-w-md">
                       <div className="flex justify-between text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-1">
                           <span>Salud de Cuenta</span>
@@ -387,7 +369,6 @@ const Dashboard: React.FC<Props> = ({
                   </div>
               </div>
 
-              {/* Center Column: Quote */}
               <div className="hidden lg:flex flex-col items-center justify-center text-center px-4 border-l border-r border-slate-100 dark:border-slate-800/50 h-full">
                   <div className="flex items-center justify-center gap-2 text-emerald-600 dark:text-emerald-500 text-[10px] font-bold uppercase tracking-widest mb-3">
                       <Sparkles className="w-3 h-3" /> Enfoque del Día <Sparkles className="w-3 h-3" />
@@ -395,10 +376,8 @@ const Dashboard: React.FC<Props> = ({
                   <p className="text-slate-600 dark:text-slate-300 italic font-medium leading-relaxed max-w-sm">"{MOTIVATIONAL_QUOTES[quoteIndex]}"</p>
               </div>
 
-              {/* Right Column: Actions & Date Picker */}
               <div className="flex flex-row items-end gap-6 justify-end ml-auto w-full lg:w-auto h-full">
                    
-                   {/* Date Range Selector */}
                    <div className="relative hidden md:block mb-2" ref={dateMenuRef}>
                        <div className="flex items-center gap-1">
                            {[
@@ -429,7 +408,6 @@ const Dashboard: React.FC<Props> = ({
                            ))}
                        </div>
 
-                       {/* Custom Range Popover */}
                        {dateRange === 'custom' && showDateMenu && (
                            <div className="absolute right-0 top-full mt-2 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl z-50 overflow-hidden p-3 animate-in fade-in zoom-in-95 duration-200">
                                <div className="space-y-3">
@@ -462,9 +440,7 @@ const Dashboard: React.FC<Props> = ({
                        )}
                    </div>
 
-                   {/* Buttons */}
                    <div className="flex flex-col gap-2 items-end">
-                       {/* Share Button */}
                        <button 
                            onClick={handleShare}
                            disabled={isGeneratingShare}
@@ -474,7 +450,6 @@ const Dashboard: React.FC<Props> = ({
                            {shareFeedback || "Compartir Progreso"}
                        </button>
 
-                       {/* Account Switcher */}
                        <div className="relative" ref={accountMenuRef}>
                             <button 
                                 onClick={() => setShowAccountMenu(!showAccountMenu)}
@@ -506,7 +481,6 @@ const Dashboard: React.FC<Props> = ({
 
       {/* 2. KPI GRID (6 Cards) */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 relative z-0">
-          {/* Card 1: Ganancia Neta */}
           <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg relative group overflow-hidden transition-colors">
               <div className="absolute inset-0 border-2 border-emerald-500/20 rounded-xl pointer-events-none group-hover:border-emerald-500/50 transition-colors"></div>
               <div className="relative z-10">
@@ -515,12 +489,11 @@ const Dashboard: React.FC<Props> = ({
                       {dateRange === 'all' ? 'Ganancia Neta' : 'P/L (Periodo)'}
                   </p>
                   <p className={`text-xl font-black ${stats.profit >= 0 ? 'text-emerald-500 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400'}`}>
-                      ${stats.profit.toLocaleString()}
+                      {isPrivacyMode ? '****' : `$${stats.profit.toLocaleString()}`}
                   </p>
               </div>
           </div>
 
-          {/* Card 2: Win Rate */}
           <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg relative group overflow-hidden transition-colors">
               <div className="absolute inset-0 border-2 border-blue-500/20 rounded-xl pointer-events-none group-hover:border-blue-500/50 transition-colors"></div>
               <div className="relative z-10">
@@ -532,7 +505,6 @@ const Dashboard: React.FC<Props> = ({
               </div>
           </div>
 
-          {/* Card 3: Trades */}
           <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg relative group overflow-hidden transition-colors">
               <div className="absolute inset-0 border-2 border-purple-500/20 rounded-xl pointer-events-none group-hover:border-purple-500/50 transition-colors"></div>
               <div className="relative z-10">
@@ -544,31 +516,28 @@ const Dashboard: React.FC<Props> = ({
               </div>
           </div>
 
-          {/* Card 4: Mejor Trade */}
           <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg relative group overflow-hidden transition-colors">
               <div className="absolute inset-0 border-2 border-cyan-500/20 rounded-xl pointer-events-none group-hover:border-cyan-500/50 transition-colors"></div>
               <div className="relative z-10">
                   <div className="p-2 bg-cyan-500/10 rounded-lg w-fit mb-3"><Trophy className="w-4 h-4 text-cyan-500" /></div>
                   <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Mejor Trade</p>
                   <p className="text-xl font-black text-emerald-500 dark:text-emerald-400">
-                      +${stats.bestTrade.toLocaleString()}
+                      {isPrivacyMode ? '****' : `+$${stats.bestTrade.toLocaleString()}`}
                   </p>
               </div>
           </div>
 
-          {/* Card 5: Peor Trade */}
           <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg relative group overflow-hidden transition-colors">
               <div className="absolute inset-0 border-2 border-rose-500/20 rounded-xl pointer-events-none group-hover:border-rose-500/50 transition-colors"></div>
               <div className="relative z-10">
                   <div className="p-2 bg-rose-500/10 rounded-lg w-fit mb-3"><TrendingDown className="w-4 h-4 text-rose-500" /></div>
                   <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Peor Trade</p>
                   <p className="text-xl font-black text-rose-500 dark:text-rose-400">
-                      -${Math.abs(stats.worstTrade).toLocaleString()}
+                      {isPrivacyMode ? '****' : `-$${Math.abs(stats.worstTrade).toLocaleString()}`}
                   </p>
               </div>
           </div>
 
-          {/* Card 6: Días Restantes */}
           <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg relative group overflow-hidden transition-colors">
               <div className="absolute inset-0 border-2 border-amber-500/20 rounded-xl pointer-events-none group-hover:border-amber-500/50 transition-colors"></div>
               <div className="relative z-10">
@@ -576,6 +545,99 @@ const Dashboard: React.FC<Props> = ({
                   <p className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">Días Restantes</p>
                   <p className="text-xl font-black text-slate-900 dark:text-white">
                       {stats.daysRemaining}
+                  </p>
+              </div>
+          </div>
+      </div>
+
+      {/* 2.5 ADVANCED STATS ROW (New Section) */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 relative z-0">
+          {/* Card 1: Esperanza Matemática */}
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-lg relative overflow-hidden group">
+              <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity">
+                  <Target className="w-24 h-24" />
+              </div>
+              <h3 className="font-bold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-widest mb-1 flex items-center gap-2">
+                  <BrainCircuit className="w-4 h-4 text-purple-500" /> Esperanza Matemática
+              </h3>
+              <div className="mt-4">
+                  <p className={`text-3xl font-black ${advancedStats.expectancy > 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                      {isPrivacyMode ? '****' : `$${advancedStats.expectancy.toFixed(2)}`}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">
+                      Es lo que ganas (o pierdes) en promedio <strong>cada vez</strong> que ejecutas un trade.
+                  </p>
+              </div>
+              <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 gap-4 text-xs">
+                  <div>
+                      <span className="text-slate-400 block mb-0.5">Avg Win</span>
+                      <span className="font-bold text-emerald-500">{isPrivacyMode ? '****' : `$${advancedStats.avgWin.toFixed(0)}`}</span>
+                  </div>
+                  <div>
+                      <span className="text-slate-400 block mb-0.5">Avg Loss</span>
+                      <span className="font-bold text-rose-500">{isPrivacyMode ? '****' : `$${advancedStats.avgLoss.toFixed(0)}`}</span>
+                  </div>
+              </div>
+          </div>
+
+          {/* Card 2: Profit Factor */}
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-lg relative overflow-hidden group">
+              <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity">
+                  <Activity className="w-24 h-24" />
+              </div>
+              <h3 className="font-bold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-widest mb-1 flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-blue-500" /> Profit Factor
+              </h3>
+              <div className="mt-4 flex items-baseline gap-2">
+                  <p className={`text-3xl font-black ${advancedStats.profitFactor >= 2 ? 'text-emerald-500' : advancedStats.profitFactor >= 1.2 ? 'text-blue-500' : 'text-orange-500'}`}>
+                      {advancedStats.profitFactor.toFixed(2)}
+                  </p>
+                  <span className="text-sm font-bold text-slate-400">
+                      {advancedStats.profitFactor >= 2 ? '🔥 Excelente' : advancedStats.profitFactor >= 1.2 ? '✅ Saludable' : '⚠️ Precaución'}
+                  </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1">
+                  Por cada $1 que pierdes, el mercado te devuelve <strong>${advancedStats.profitFactor.toFixed(2)}</strong>.
+              </p>
+              
+              {/* Simple Bar Gauge */}
+              <div className="mt-6 h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden flex">
+                  <div className="bg-rose-500 h-full w-1/3"></div>
+                  <div className="bg-orange-500 h-full w-1/6"></div>
+                  <div className="bg-emerald-500 h-full flex-1 relative">
+                      {/* Marker */}
+                      <div 
+                          className="absolute top-0 bottom-0 w-1 bg-white dark:bg-slate-900 border-x border-slate-300 dark:border-slate-700 shadow-lg" 
+                          style={{ left: `${Math.min(100, (Math.max(0, advancedStats.profitFactor - 1.0) / 2.0) * 100)}%` }} // Position logic: starts at 1.0 = 50% ish
+                      ></div>
+                  </div>
+              </div>
+              <div className="flex justify-between text-[10px] text-slate-400 mt-1 font-mono">
+                  <span>1.0</span>
+                  <span>1.5</span>
+                  <span>3.0+</span>
+              </div>
+          </div>
+
+          {/* Card 3: Proyección */}
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-lg relative overflow-hidden group">
+              <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none group-hover:opacity-10 transition-opacity">
+                  <Rocket className="w-24 h-24" />
+              </div>
+              <h3 className="font-bold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-widest mb-1 flex items-center gap-2">
+                  <Rocket className="w-4 h-4 text-orange-500" /> Proyección 6 Meses
+              </h3>
+              <div className="mt-4">
+                  <p className={`text-3xl font-black ${advancedStats.projected6Months > 0 ? 'text-emerald-500' : 'text-slate-500'}`}>
+                      {isPrivacyMode ? '****' : `${advancedStats.projected6Months > 0 ? '+' : ''}$${Math.round(advancedStats.projected6Months).toLocaleString()}`}
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">
+                      Estimación basada en tu Esperanza Matemática y frecuencia actual ({advancedStats.tradesPerDay.toFixed(1)} trades/día).
+                  </p>
+              </div>
+              <div className="mt-4 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-slate-100 dark:border-slate-700">
+                  <p className="text-[10px] text-slate-500 italic text-center">
+                      "El trading es un juego de números. Mantén tu esperanza positiva y deja que las probabilidades hagan el resto."
                   </p>
               </div>
           </div>
@@ -590,7 +652,7 @@ const Dashboard: React.FC<Props> = ({
                        <TrendingUp className="w-4 h-4 text-emerald-500" /> Curva de P/L {dateRange !== 'all' ? `(${getDateRangeLabel()})` : ''}
                    </h3>
                </div>
-               <div className="h-[300px] w-full">
+               <div className={`h-[300px] w-full ${isPrivacyMode ? 'blur-md select-none' : ''}`}>
                   <ResponsiveContainer width="100%" height="100%">
                       <AreaChart data={capitalData}>
                           <defs>
@@ -692,9 +754,9 @@ const Dashboard: React.FC<Props> = ({
            {/* Daily Performance */}
            <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-lg transition-colors">
                <h3 className="font-bold text-slate-900 dark:text-white mb-6 flex items-center gap-2 text-sm">
-                   <BarChart3 className="w-4 h-4 text-emerald-500" /> Rendimiento Diario
+                   <BarChart3 className="w-4 h-4 text-emerald-500" /> Rendimiento Diario (Por Sesión)
                </h3>
-               <div className="h-[200px] w-full">
+               <div className={`h-[200px] w-full ${isPrivacyMode ? 'blur-md select-none' : ''}`}>
                   <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={dailyData}>
                           <CartesianGrid strokeDasharray="3 3" stroke={chartStyles.gridColor} vertical={false} />
@@ -716,7 +778,7 @@ const Dashboard: React.FC<Props> = ({
                <h3 className="font-bold text-slate-900 dark:text-white mb-6 flex items-center gap-2 text-sm">
                    <BarChart3 className="w-4 h-4 text-blue-500" /> Rendimiento por Activo
                </h3>
-               <div className="h-[200px] w-full">
+               <div className={`h-[200px] w-full ${isPrivacyMode ? 'blur-md select-none' : ''}`}>
                   <ResponsiveContainer width="100%" height="100%">
                       <BarChart data={assetData}>
                           <CartesianGrid strokeDasharray="3 3" stroke={chartStyles.gridColor} vertical={false} />
@@ -732,6 +794,59 @@ const Dashboard: React.FC<Props> = ({
                   </ResponsiveContainer>
                </div>
            </div>
+      </div>
+
+      {/* 5. RISK ANALYSIS ROW (New) */}
+      <div className="grid grid-cols-1 gap-6 relative z-0">
+          <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-lg transition-colors">
+              <div className="flex items-center justify-between mb-6">
+                  <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2 text-sm">
+                      <Crosshair className="w-4 h-4 text-purple-500" /> Distribución de Riesgo:Beneficio (R-Multiples)
+                  </h3>
+                  {rMultipleData.length > 0 && (
+                      <div className="flex gap-4 text-xs font-medium text-slate-500 dark:text-slate-400">
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500"></span>Ganancia</span>
+                          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-500"></span>Pérdida</span>
+                      </div>
+                  )}
+              </div>
+              
+              {rMultipleData.length > 0 ? (
+                  <div className={`h-[300px] w-full ${isPrivacyMode ? 'blur-md select-none' : ''}`}>
+                      <ResponsiveContainer width="100%" height="100%">
+                          <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
+                              <CartesianGrid strokeDasharray="3 3" stroke={chartStyles.gridColor} vertical={false} />
+                              <XAxis type="number" dataKey="index" name="Trade" stroke={chartStyles.axisColor} fontSize={10} tickLine={false} axisLine={false} tickCount={rMultipleData.length > 10 ? 10 : rMultipleData.length} domain={['dataMin', 'dataMax']} />
+                              <YAxis type="number" dataKey="r" name="R-Multiple" stroke={chartStyles.axisColor} fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `${val}R`} />
+                              <Tooltip 
+                                  cursor={{ strokeDasharray: '3 3' }} 
+                                  contentStyle={chartStyles.tooltipContent}
+                                  formatter={(value: any, name: any, props: any) => {
+                                      if (name === 'r') return [`${value}R`, 'Riesgo:Beneficio'];
+                                      return [value, name];
+                                  }}
+                                  labelFormatter={() => ''}
+                              />
+                              <ReferenceLine y={0} stroke={chartStyles.gridColor} strokeWidth={2} />
+                              <ReferenceLine y={1} stroke="#10b981" strokeDasharray="3 3" opacity={0.5} label={{ value: '1R', fill: '#10b981', fontSize: 10 }} />
+                              <ReferenceLine y={2} stroke="#10b981" strokeDasharray="3 3" opacity={0.3} label={{ value: '2R', fill: '#10b981', fontSize: 10 }} />
+                              <ReferenceLine y={-1} stroke="#f43f5e" strokeDasharray="3 3" opacity={0.5} label={{ value: '-1R', fill: '#f43f5e', fontSize: 10 }} />
+                              <Scatter name="Trades" data={rMultipleData} fill="#8884d8">
+                                  {rMultipleData.map((entry, index) => (
+                                      <Cell key={`cell-${index}`} fill={entry.r >= 0 ? '#10b981' : '#f43f5e'} />
+                                  ))}
+                              </Scatter>
+                          </ScatterChart>
+                      </ResponsiveContainer>
+                  </div>
+              ) : (
+                  <div className="h-[300px] flex flex-col items-center justify-center text-slate-400 bg-slate-50 dark:bg-slate-800/30 rounded-xl border border-dashed border-slate-200 dark:border-slate-700">
+                      <AlertCircle className="w-8 h-8 mb-2 opacity-50" />
+                      <p className="text-sm font-medium">No hay datos de R:R disponibles.</p>
+                      <p className="text-xs opacity-70 mt-1">Asegúrate de registrar tus trades con "Stop Loss" para ver esta gráfica.</p>
+                  </div>
+              )}
+          </div>
       </div>
 
     </div>

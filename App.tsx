@@ -175,6 +175,25 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [notification, setNotification] = useState<NotificationData | null>(null);
 
+  // PRIVACY MODE (oculta cifras en UI)
+  const [isPrivacyMode, setIsPrivacyMode] = useState<boolean>(() => {
+    return localStorage.getItem('privacy_mode') === 'true';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('privacy_mode', String(isPrivacyMode));
+  }, [isPrivacyMode]);
+
+  // Mantén el estado sincronizado si cambia desde otra pestaña/ventana
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== 'privacy_mode') return;
+      setIsPrivacyMode(localStorage.getItem('privacy_mode') === 'true');
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
+
   // THEME
   useEffect(() => {
     const root = window.document.documentElement;
@@ -366,7 +385,16 @@ function App() {
   );
 
   const totalProfit = useMemo(() => accountTrades.reduce((acc, t) => acc + t.profit, 0), [accountTrades]);
-  const progressPercentage = Math.min(100, Math.max(0, (totalProfit / activeAccount.goal) * 100));
+  const progressPercentage = useMemo(() => {
+    const goal = Number(activeAccount.goal) || 0;
+    if (goal <= 0) return 0;
+    return Math.min(100, Math.max(0, (totalProfit / goal) * 100));
+  }, [totalProfit, activeAccount.goal]);
+
+  const remainingToGoal = useMemo(() => {
+    const goal = Number(activeAccount.goal) || 0;
+    return Math.max(0, goal - totalProfit);
+  }, [totalProfit, activeAccount.goal]);
 
   const toggleTheme = () =>
     setTheme(prev => (prev === 'light' ? 'dark' : prev === 'dark' ? 'midnight' : 'light'));
@@ -623,8 +651,36 @@ function App() {
                 {progressPercentage.toFixed(1)}%
               </span>
             </div>
+
+            <div className="flex items-baseline justify-between mb-2">
+              <span
+                className={`text-lg font-black ${
+                  totalProfit >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-700 dark:text-white'
+                }`}
+              >
+                {isPrivacyMode
+                  ? '****'
+                  : `$${totalProfit.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+              </span>
+              <span className="text-[10px] text-slate-400 font-medium">
+                / ${activeAccount.goal.toLocaleString(undefined, { compactDisplay: 'short', notation: 'compact' })}
+              </span>
+            </div>
+
             <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-1.5 overflow-hidden mb-2">
-              <div className="bg-emerald-500 h-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(16,185,129,0.5)]" style={{ width: `${progressPercentage}%` }} />
+              <div
+                className="bg-emerald-500 h-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(16,185,129,0.5)]"
+                style={{ width: `${progressPercentage}%` }}
+              />
+            </div>
+
+            <div className="flex justify-between items-center text-[10px] font-medium pt-1 border-t border-slate-200 dark:border-slate-700/50 mt-1">
+              <span className="text-slate-400">Restante:</span>
+              <span className="text-slate-700 dark:text-slate-200 font-bold">
+                {isPrivacyMode
+                  ? '****'
+                  : `$${remainingToGoal.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`}
+              </span>
             </div>
           </div>
         </div>

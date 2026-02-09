@@ -5,7 +5,7 @@ import {
   Trash2, ChevronDown, ChevronUp, 
   Check, X, Pencil, Star,
   Search, Filter, SlidersHorizontal, Clock, ImageIcon, Save, UploadCloud, Plus,
-  MoveVertical, Hash, ScrollText, BarChart2, CheckCircle2, XCircle, MinusCircle, LayoutList
+  MoveVertical, Hash, ScrollText, BarChart2, CheckCircle2, XCircle, MinusCircle, LayoutList, Shield, Target
 } from 'lucide-react';
 
 interface Props {
@@ -14,6 +14,7 @@ interface Props {
   onUpdate?: (trade: Trade) => void;
   goal: number;
   isReal?: boolean;
+  isPrivacyMode?: boolean;
 }
 
 // Helper para detectar multiplicador basado en nombre parcial
@@ -90,7 +91,17 @@ const calculateDuration = (start: string, end?: string) => {
     return `${minutes}m`;
 };
 
-const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal = false }) => {
+const calculateRR = (trade: Trade) => {
+    if (!trade.stopLoss || trade.stopLoss === 0) return null;
+    
+    const risk = Math.abs(trade.entryPrice - trade.stopLoss);
+    const reward = Math.abs(trade.exitPrice - trade.entryPrice);
+    
+    if (risk === 0) return 0;
+    return reward / risk;
+};
+
+export const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal = false, isPrivacyMode = false }) => {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [editingTrade, setEditingTrade] = useState<Trade | null>(null);
@@ -141,11 +152,36 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
 
   // 2. Estadísticas calculadas sobre la base (No afectadas por el filtro de estado)
   const stats = useMemo(() => {
-      const total = tradesBaseFiltered.length;
-      const wins = tradesBaseFiltered.filter(t => t.status === TradeStatus.WIN).length;
-      const losses = tradesBaseFiltered.filter(t => t.status === TradeStatus.LOSS).length;
-      const breakeven = tradesBaseFiltered.filter(t => t.status === TradeStatus.BREAK_EVEN).length;
-      return { total, wins, losses, breakeven };
+      // Helper for sums
+      const sum = (arr: Trade[]) => arr.reduce((acc, t) => acc + t.profit, 0);
+      const max = (arr: Trade[]) => arr.length > 0 ? Math.max(...arr.map(t => t.profit)) : 0;
+      const min = (arr: Trade[]) => arr.length > 0 ? Math.min(...arr.map(t => t.profit)) : 0;
+
+      const totalCount = tradesBaseFiltered.length;
+      const totalPL = sum(tradesBaseFiltered);
+
+      const wins = tradesBaseFiltered.filter(t => t.status === TradeStatus.WIN);
+      const winsCount = wins.length;
+      const winsPL = sum(wins);
+      const winsBest = max(wins);
+      const winsWorst = min(wins); // Smallest win
+
+      const losses = tradesBaseFiltered.filter(t => t.status === TradeStatus.LOSS);
+      const lossesCount = losses.length;
+      const lossesPL = sum(losses);
+      const lossesBest = max(losses); // Least loss (closest to 0)
+      const lossesWorst = min(losses); // Biggest loss
+
+      const be = tradesBaseFiltered.filter(t => t.status === TradeStatus.BREAK_EVEN);
+      const beCount = be.length;
+      const bePL = sum(be);
+
+      return { 
+          total: { count: totalCount, pnl: totalPL }, 
+          wins: { count: winsCount, pnl: winsPL, best: winsBest, worst: winsWorst }, 
+          losses: { count: lossesCount, pnl: lossesPL, best: lossesBest, worst: lossesWorst }, 
+          breakeven: { count: beCount, pnl: bePL } 
+      };
   }, [tradesBaseFiltered]);
 
   // 3. Trades finales para mostrar en la tabla (Afectados por filtro de estado)
@@ -159,24 +195,33 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
     setExpandedId(expandedId === id ? null : id);
   };
 
-  // Manejo de imágenes en edición
-  const handleEditFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Manejo de imágenes (Soporte Nube / Original Size)
+  const handleEditFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files && files.length > 0 && editingTrade) {
-      Array.from(files).forEach((file) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (reader.result) {
-            setEditingTrade(prev => {
-                if (!prev) return null;
-                const currentScreenshots = prev.screenshots || [];
-                return { ...prev, screenshots: [...currentScreenshots, reader.result as string] };
+    if (!files || files.length === 0 || !editingTrade) return;
+
+    const newScreenshots: string[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+            const base64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
             });
-          }
-        };
-        reader.readAsDataURL(file as Blob);
-      });
+            newScreenshots.push(base64);
+        } catch (err) {
+            console.error("Error leyendo imagen", err);
+        }
     }
+
+    setEditingTrade(prev => {
+        if (!prev) return null;
+        return { ...prev, screenshots: [...(prev.screenshots || []), ...newScreenshots] };
+    });
+
     if (editFileInputRef.current) editFileInputRef.current.value = '';
   };
 
@@ -264,77 +309,122 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
 
         {/* --- STATS SUMMARY BAR AS FILTERS --- */}
         {trades.length > 0 && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {/* TOTAL BUTTON */}
                 <button 
                     onClick={() => setStatusFilter('ALL')}
-                    className={`p-3 rounded-xl flex items-center gap-3 shadow-sm border transition-all duration-200 text-left group ${
+                    className={`relative p-4 rounded-2xl border transition-all duration-200 text-left group overflow-hidden ${
                         statusFilter === 'ALL' 
-                        ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 ring-1 ring-blue-500' 
-                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700'
+                        ? 'bg-blue-50 dark:bg-blue-900/20 border-blue-500 ring-1 ring-blue-500 shadow-lg' 
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700 shadow-sm'
                     }`}
                 >
-                    <div className={`p-2 rounded-lg transition-colors ${statusFilter === 'ALL' ? 'bg-blue-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 group-hover:text-blue-500'}`}>
-                        <LayoutList className="w-5 h-5" />
+                    <div className="flex items-start justify-between mb-2">
+                        <div>
+                            <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${statusFilter === 'ALL' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`}>Total</p>
+                            <p className={`text-2xl font-black ${statusFilter === 'ALL' ? 'text-blue-700 dark:text-blue-300' : 'text-slate-900 dark:text-white'}`}>{stats.total.count}</p>
+                        </div>
+                        <div className={`p-2 rounded-xl ${statusFilter === 'ALL' ? 'bg-blue-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 group-hover:text-blue-500'}`}>
+                            <LayoutList className="w-5 h-5" />
+                        </div>
                     </div>
-                    <div>
-                        <p className={`text-[10px] font-bold uppercase tracking-wider ${statusFilter === 'ALL' ? 'text-blue-600 dark:text-blue-400' : 'text-slate-400'}`}>Total</p>
-                        <p className={`text-lg font-black ${statusFilter === 'ALL' ? 'text-blue-700 dark:text-blue-300' : 'text-slate-900 dark:text-white'}`}>{stats.total}</p>
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800/50 mt-2">
+                        <div className="flex justify-between items-center text-xs">
+                            <span className="text-slate-500 dark:text-slate-400 font-medium">P/L Neto</span>
+                            <span className={`font-black font-mono ${stats.total.pnl >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                                {isPrivacyMode ? '****' : `${stats.total.pnl >= 0 ? '+' : ''}${stats.total.pnl.toLocaleString(undefined, {minimumFractionDigits: 2})}`}
+                            </span>
+                        </div>
                     </div>
                 </button>
                 
+                {/* WINS BUTTON */}
                 <button 
                     onClick={() => setStatusFilter(TradeStatus.WIN)}
-                    className={`p-3 rounded-xl flex items-center gap-3 shadow-sm border transition-all duration-200 text-left group ${
+                    className={`relative p-4 rounded-2xl border transition-all duration-200 text-left group overflow-hidden ${
                         statusFilter === TradeStatus.WIN 
-                        ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-500 ring-1 ring-emerald-500' 
-                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-300 dark:hover:border-emerald-700'
+                        ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-500 ring-1 ring-emerald-500 shadow-lg' 
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-300 dark:hover:border-emerald-700 shadow-sm'
                     }`}
                 >
-                    <div className={`p-2 rounded-lg transition-colors ${statusFilter === TradeStatus.WIN ? 'bg-emerald-500 text-white' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white'}`}>
-                        <CheckCircle2 className="w-5 h-5" />
+                    <div className="flex items-start justify-between mb-2">
+                        <div>
+                            <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${statusFilter === TradeStatus.WIN ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>Ganados</p>
+                            <p className={`text-2xl font-black ${statusFilter === TradeStatus.WIN ? 'text-emerald-700 dark:text-emerald-300' : 'text-emerald-600 dark:text-emerald-400'}`}>{stats.wins.count}</p>
+                        </div>
+                        <div className={`p-2 rounded-xl ${statusFilter === TradeStatus.WIN ? 'bg-emerald-500 text-white' : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400 group-hover:bg-emerald-500 group-hover:text-white'}`}>
+                            <CheckCircle2 className="w-5 h-5" />
+                        </div>
                     </div>
-                    <div>
-                        <p className={`text-[10px] font-bold uppercase tracking-wider ${statusFilter === TradeStatus.WIN ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}`}>Ganados</p>
-                        <p className={`text-lg font-black ${statusFilter === TradeStatus.WIN ? 'text-emerald-700 dark:text-emerald-300' : 'text-emerald-600 dark:text-emerald-400'}`}>{stats.wins}</p>
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800/50 mt-2 space-y-1">
+                        <div className="flex justify-between items-center text-[10px]">
+                            <span className="text-slate-500 dark:text-slate-400">Total</span>
+                            <span className="font-bold font-mono text-emerald-500">{isPrivacyMode ? '****' : `+${stats.wins.pnl.toLocaleString(undefined, {minimumFractionDigits: 0})}`}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-[10px]">
+                            <span className="text-slate-500 dark:text-slate-400">Mejor</span>
+                            <span className="font-bold font-mono text-emerald-500">{isPrivacyMode ? '****' : `+${stats.wins.best.toLocaleString(undefined, {minimumFractionDigits: 0})}`}</span>
+                        </div>
                     </div>
                 </button>
 
+                {/* LOSSES BUTTON */}
                 <button 
                     onClick={() => setStatusFilter(TradeStatus.LOSS)}
-                    className={`p-3 rounded-xl flex items-center gap-3 shadow-sm border transition-all duration-200 text-left group ${
+                    className={`relative p-4 rounded-2xl border transition-all duration-200 text-left group overflow-hidden ${
                         statusFilter === TradeStatus.LOSS 
-                        ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-500 ring-1 ring-rose-500' 
-                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-300 dark:hover:border-rose-700'
+                        ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-500 ring-1 ring-rose-500 shadow-lg' 
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-300 dark:hover:border-rose-700 shadow-sm'
                     }`}
                 >
-                    <div className={`p-2 rounded-lg transition-colors ${statusFilter === TradeStatus.LOSS ? 'bg-rose-500 text-white' : 'bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 group-hover:bg-rose-500 group-hover:text-white'}`}>
-                        <XCircle className="w-5 h-5" />
+                    <div className="flex items-start justify-between mb-2">
+                        <div>
+                            <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${statusFilter === TradeStatus.LOSS ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400'}`}>Perdidos</p>
+                            <p className={`text-2xl font-black ${statusFilter === TradeStatus.LOSS ? 'text-rose-700 dark:text-rose-300' : 'text-rose-600 dark:text-rose-400'}`}>{stats.losses.count}</p>
+                        </div>
+                        <div className={`p-2 rounded-xl ${statusFilter === TradeStatus.LOSS ? 'bg-rose-500 text-white' : 'bg-rose-100 dark:bg-rose-900/30 text-rose-600 dark:text-rose-400 group-hover:bg-rose-500 group-hover:text-white'}`}>
+                            <XCircle className="w-5 h-5" />
+                        </div>
                     </div>
-                    <div>
-                        <p className={`text-[10px] font-bold uppercase tracking-wider ${statusFilter === TradeStatus.LOSS ? 'text-rose-600 dark:text-rose-400' : 'text-slate-400'}`}>Perdidos</p>
-                        <p className={`text-lg font-black ${statusFilter === TradeStatus.LOSS ? 'text-rose-700 dark:text-rose-300' : 'text-rose-600 dark:text-rose-400'}`}>{stats.losses}</p>
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800/50 mt-2 space-y-1">
+                        <div className="flex justify-between items-center text-[10px]">
+                            <span className="text-slate-500 dark:text-slate-400">Total</span>
+                            <span className="font-bold font-mono text-rose-500">{isPrivacyMode ? '****' : stats.losses.pnl.toLocaleString(undefined, {minimumFractionDigits: 0})}</span>
+                        </div>
+                        <div className="flex justify-between items-center text-[10px]">
+                            <span className="text-slate-500 dark:text-slate-400">Max DD</span>
+                            <span className="font-bold font-mono text-rose-500">{isPrivacyMode ? '****' : stats.losses.worst.toLocaleString(undefined, {minimumFractionDigits: 0})}</span>
+                        </div>
                     </div>
                 </button>
 
+                {/* BREAK EVEN BUTTON */}
                 <button 
                     onClick={() => setStatusFilter(TradeStatus.BREAK_EVEN)}
-                    className={`p-3 rounded-xl flex items-center gap-3 shadow-sm border transition-all duration-200 text-left group ${
+                    className={`relative p-4 rounded-2xl border transition-all duration-200 text-left group overflow-hidden ${
                         statusFilter === TradeStatus.BREAK_EVEN 
-                        ? 'bg-slate-100 dark:bg-slate-800 border-slate-400 ring-1 ring-slate-400' 
-                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-600'
+                        ? 'bg-slate-100 dark:bg-slate-800 border-slate-400 ring-1 ring-slate-400 shadow-lg' 
+                        : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-600 shadow-sm'
                     }`}
                 >
-                    <div className={`p-2 rounded-lg transition-colors ${statusFilter === TradeStatus.BREAK_EVEN ? 'bg-slate-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 group-hover:bg-slate-500 group-hover:text-white'}`}>
-                        <MinusCircle className="w-5 h-5" />
+                    <div className="flex items-start justify-between mb-2">
+                        <div>
+                            <p className={`text-[10px] font-bold uppercase tracking-wider mb-1 ${statusFilter === TradeStatus.BREAK_EVEN ? 'text-slate-600 dark:text-slate-400' : 'text-slate-400'}`}>Break Even</p>
+                            <p className={`text-2xl font-black ${statusFilter === TradeStatus.BREAK_EVEN ? 'text-slate-800 dark:text-slate-200' : 'text-slate-700 dark:text-slate-300'}`}>{stats.breakeven.count}</p>
+                        </div>
+                        <div className={`p-2 rounded-xl ${statusFilter === TradeStatus.BREAK_EVEN ? 'bg-slate-500 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500 group-hover:bg-slate-500 group-hover:text-white'}`}>
+                            <MinusCircle className="w-5 h-5" />
+                        </div>
                     </div>
-                    <div>
-                        <p className={`text-[10px] font-bold uppercase tracking-wider ${statusFilter === TradeStatus.BREAK_EVEN ? 'text-slate-600 dark:text-slate-400' : 'text-slate-400'}`}>Break Even</p>
-                        <p className={`text-lg font-black ${statusFilter === TradeStatus.BREAK_EVEN ? 'text-slate-800 dark:text-slate-200' : 'text-slate-700 dark:text-slate-300'}`}>{stats.breakeven}</p>
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800/50 mt-2 space-y-1">
+                        <div className="flex justify-between items-center text-[10px]">
+                            <span className="text-slate-500 dark:text-slate-400">P/L Total</span>
+                            <span className="font-bold font-mono text-slate-500 dark:text-slate-400">{isPrivacyMode ? '****' : `$${stats.breakeven.pnl.toFixed(2)}`}</span>
+                        </div>
                     </div>
                 </button>
             </div>
         )}
-      </div>
 
       {/* Barra de Filtros */}
       {trades.length > 0 && (
@@ -420,7 +510,9 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredTrades.map((trade) => (
+                {filteredTrades.map((trade) => {
+                  const rr = calculateRR(trade);
+                  return (
                   <React.Fragment key={trade.id}>
                     <tr onClick={() => toggleExpand(trade.id)} className={`cursor-pointer transition-colors ${expandedId === trade.id ? 'bg-slate-50 dark:bg-slate-800/50' : 'hover:bg-slate-50 dark:hover:bg-slate-800/30'}`}>
                       <td className="px-6 py-4">
@@ -440,9 +532,16 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
                         <div className={`text-[10px] font-bold ${trade.direction === TradeDirection.LONG ? 'text-emerald-500' : 'text-orange-500'}`}>{trade.direction}</div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap">
-                        <span className={`text-sm font-black ${trade.status === TradeStatus.WIN ? 'text-emerald-500' : trade.status === TradeStatus.LOSS ? 'text-rose-500' : 'text-slate-400'}`}>
-                          {trade.profit > 0 ? '+' : ''}{trade.profit.toLocaleString()}
-                        </span>
+                        <div className="flex flex-col">
+                            <span className={`text-sm font-black ${trade.status === TradeStatus.WIN ? 'text-emerald-500' : trade.status === TradeStatus.LOSS ? 'text-rose-500' : 'text-slate-400'}`}>
+                              {isPrivacyMode ? '****' : `${trade.profit > 0 ? '+' : ''}${trade.profit.toLocaleString()}`}
+                            </span>
+                            {rr !== null && (
+                                <span className={`text-[9px] font-bold ${rr >= 2 ? 'text-emerald-500' : 'text-slate-400'}`}>
+                                    R:R 1:{rr.toFixed(1)}
+                                </span>
+                            )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -536,6 +635,20 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
                                           {(Math.abs(trade.exitPrice - trade.entryPrice) / getTickSize(trade.asset)).toFixed(0)}
                                       </span>
                                    </div>
+                                    
+                                   {/* RISK METRICS SECTION */}
+                                   {(rr !== null && trade.stopLoss) && (
+                                       <div className="pt-3 mt-1 border-t border-slate-100 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-700/20 -mx-5 px-5 py-2">
+                                           <div className="flex justify-between items-center mb-1">
+                                               <span className="text-[10px] text-slate-500 uppercase font-bold flex items-center gap-1"><Shield className="w-3 h-3"/> Stop Loss</span>
+                                               <span className="text-xs font-mono font-bold text-rose-500">{trade.stopLoss}</span>
+                                           </div>
+                                           <div className="flex justify-between items-center">
+                                               <span className="text-[10px] text-slate-500 uppercase font-bold flex items-center gap-1"><Target className="w-3 h-3"/> R:R Realizado</span>
+                                               <span className={`text-xs font-mono font-bold ${rr >= 2 ? 'text-emerald-500' : 'text-blue-500'}`}>1 : {rr.toFixed(2)}</span>
+                                           </div>
+                                       </div>
+                                   )}
 
                                    <div className="pt-3 mt-1 border-t border-slate-100 dark:border-slate-700">
                                        <div className="flex justify-between items-center mb-1">
@@ -594,7 +707,7 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
                       </tr>
                     )}
                   </React.Fragment>
-                ))}
+                )}})}
               </tbody>
             </table>
           </div>
@@ -667,7 +780,7 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
               </div>
 
               {/* Datos Numéricos */}
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                  <div>
                     <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Size</label>
                     <input 
@@ -677,6 +790,9 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
                       onChange={e => recalculateEditingTrade({ size: parseFloat(e.target.value) })}
                     />
                  </div>
+              </div>
+              
+              <div className="grid grid-cols-3 gap-4">
                  <div>
                     <label className="block text-xs font-bold text-slate-400 uppercase mb-1">Entrada</label>
                     <input 
@@ -684,6 +800,15 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
                       className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm outline-none focus:ring-2 focus:ring-emerald-500 dark:text-white"
                       value={editingTrade.entryPrice}
                       onChange={e => recalculateEditingTrade({ entryPrice: parseFloat(e.target.value) })}
+                    />
+                 </div>
+                 <div>
+                    <label className="block text-xs font-bold text-rose-400 uppercase mb-1">Stop Loss</label>
+                    <input 
+                      type="number" step="0.01"
+                      className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-rose-200 dark:border-rose-900/50 rounded-xl text-sm outline-none focus:ring-2 focus:ring-rose-500 dark:text-white"
+                      value={editingTrade.stopLoss || ''}
+                      onChange={e => recalculateEditingTrade({ stopLoss: parseFloat(e.target.value) })}
                     />
                  </div>
                  <div>
@@ -822,7 +947,3 @@ const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, isReal =
         </div>
       )}
     </>
-  );
-};
-
-export default TradeList;

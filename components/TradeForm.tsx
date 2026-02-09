@@ -1,43 +1,43 @@
+
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Trade, TradeDirection, TradeStatus, TradeSession } from '../types';
 import { getRecoverySuggestion } from '../services/geminiService';
-import { Save, X, Zap, ShieldAlert, Sparkles, ImageIcon, UploadCloud, Loader2, Calendar, AlertTriangle, Globe, Star, Plus, Clock, Coins, TestTube } from 'lucide-react';
+import { Save, X, Zap, Info, ShieldAlert, Sparkles, Brain, ImageIcon, UploadCloud, Loader2, Calendar, AlertTriangle, Globe, Star, Plus, Clock, Coins, TestTube, Target, TrendingUp, TrendingDown, Shield } from 'lucide-react';
 
 interface Props {
   onAdd: (trade: Trade) => void;
   goal: number;
   trades: Trade[];
   isReal?: boolean;
-
-  // ✅ NUEVO: cuenta activa para asignar el trade correctamente
-  activeAccountId: string;
 }
 
 const SUGGESTED_ASSETS = ['/ES', '/NQ', '/CL', '/GC', '/MES', '/MNQ', '/MCL', '/MGC'];
 
 const ASSET_MULTIPLIERS: Record<string, number> = {
   // Indices
-  '/ES': 50, 'ES': 50,
+  '/ES': 50, 'ES': 50, 
   '/MES': 5, 'MES': 5,
-  '/NQ': 20, 'NQ': 20,
+  '/NQ': 20, 'NQ': 20, 
   '/MNQ': 2, 'MNQ': 2,
   '/YM': 5, 'YM': 5,
   '/MYM': 0.5, 'MYM': 0.5,
   '/RTY': 50, 'RTY': 50,
   '/M2K': 5, 'M2K': 5,
-
+  
   // Commodities
-  '/CL': 1000, 'CL': 1000,
+  '/CL': 1000, 'CL': 1000, 
   '/MCL': 100, 'MCL': 100,
-  '/GC': 100, 'GC': 100,
+  '/GC': 100, 'GC': 100, 
   '/MGC': 10, 'MGC': 10,
   '/SI': 5000, 'SI': 5000,
-  '/SIL': 1000, 'SIL': 1000,
-  '/HG': 25000, 'HG': 25000,
-  '/MHG': 2500, 'MHG': 2500,
+  '/SIL': 1000, 'SIL': 1000, // Micro Silver approx
+  '/HG': 25000, 'HG': 25000, // Copper
+  '/MHG': 2500, 'MHG': 2500, // Micro Copper
 
-  // Currencies (simplificado)
-  '/6E': 12.5, '6E': 12.5,
+  // Currencies (Standard 6E, 6A etc usually 125,000 units or ticks valued at $12.50 or $6.25 depending on formatting)
+  // Simplified for typical prop firm point values
+  '/6E': 12.5, '6E': 12.5, // Per tick is usually 12.50, but per point (1.0000) is huge. Assuming tick value logic or standard point.
+  // We will stick to the explicitly defined ones for safety
 };
 
 // Lógica de Comisiones
@@ -45,14 +45,16 @@ const ASSET_MULTIPLIERS: Record<string, number> = {
 const getCommissionRate = (asset: string): number => {
   if (!asset) return 0;
   const clean = asset.toUpperCase().replace('/', '').trim();
-
+  
   // Lista de Micros comunes (Futuros)
   const micros = ['MES', 'MNQ', 'MCL', 'MGC', 'M2K', 'MYM', 'SIL', 'MHG'];
-
+  
+  // Si está en la lista de micros o empieza con M seguido de un ticker conocido de 3 letras
   if (micros.includes(clean) || (clean.startsWith('M') && clean.length === 4 && ['ES','NQ','CL','GC'].includes(clean.substring(1)))) {
     return 0.50;
   }
-
+  
+  // Por defecto asumimos Estándar
   return 5.00;
 };
 
@@ -62,7 +64,7 @@ const getCurrentDateTimeLocal = () => {
   return now.toISOString().slice(0, 16);
 };
 
-const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activeAccountId }) => {
+const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false }) => {
   const [formData, setFormData] = useState({
     date: getCurrentDateTimeLocal(),
     exitDate: getCurrentDateTimeLocal(),
@@ -71,18 +73,19 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
     session: TradeSession.NY,
     rating: 3,
     entryPrice: '',
+    stopLoss: '',
     exitPrice: '',
     size: '',
     notes: '',
     emotions: 'Calmado'
   });
-
+  
   const [screenshots, setScreenshots] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [aiSuggestion, setAiSuggestion] = useState<string | null>(null);
   const [loadingSuggestion, setLoadingSuggestion] = useState(false);
   const [dateError, setDateError] = useState<string | null>(null);
-
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
   const suggestionRef = useRef<HTMLDivElement>(null);
 
@@ -90,7 +93,7 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
     if (formData.date && formData.exitDate) {
       const entryTime = new Date(formData.date).getTime();
       const exitTime = new Date(formData.exitDate).getTime();
-
+      
       if (entryTime > exitTime) {
         setDateError('La fecha de entrada no puede ser posterior a la de salida');
       } else {
@@ -108,7 +111,6 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
     if (isLosingStreak && !aiSuggestion) {
       fetchSuggestion();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLosingStreak]);
 
   const fetchSuggestion = async () => {
@@ -118,17 +120,13 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
     setLoadingSuggestion(false);
   };
 
-  const currentMultiplier =
-    ASSET_MULTIPLIERS[formData.asset.toUpperCase()] ||
-    ASSET_MULTIPLIERS['/' + formData.asset.toUpperCase()] ||
-    1;
-
+  const currentMultiplier = ASSET_MULTIPLIERS[formData.asset.toUpperCase()] || ASSET_MULTIPLIERS['/' + formData.asset.toUpperCase()] || 1;
   const currentCommission = getCommissionRate(formData.asset);
 
   const priceWarning = useMemo(() => {
     const entry = parseFloat(formData.entryPrice);
     const exit = parseFloat(formData.exitPrice);
-
+    
     if (isNaN(entry) || isNaN(exit)) return null;
 
     if (formData.direction === TradeDirection.LONG && exit < entry) {
@@ -142,20 +140,45 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
 
   const liveEstimate = useMemo(() => {
     const entry = parseFloat(formData.entryPrice);
+    const sl = parseFloat(formData.stopLoss);
     const exit = parseFloat(formData.exitPrice);
     const size = parseFloat(formData.size);
-
+    
     if (isNaN(entry) || isNaN(exit) || isNaN(size)) return null;
 
-    const diff = formData.direction === TradeDirection.LONG
-      ? (exit - entry)
+    const diff = formData.direction === TradeDirection.LONG 
+      ? (exit - entry) 
       : (entry - exit);
-
+    
     const grossProfit = diff * size * currentMultiplier;
+    // Calculate total commissions only if account is Real
     const totalCommissions = isReal ? currentCommission * size : 0;
     const netProfit = grossProfit - totalCommissions;
-
     const goalImpact = (netProfit / goal) * 100;
+
+    // --- RISK & R:R CALCULATION ---
+    let riskAmount = 0;
+    let riskPerContract = 0;
+    let rrRatio = 0;
+
+    if (!isNaN(sl)) {
+        if (formData.direction === TradeDirection.LONG) {
+            riskPerContract = (entry - sl);
+        } else {
+            riskPerContract = (sl - entry);
+        }
+        
+        // Si el SL está del lado incorrecto (ej: SL arriba de entrada en Long), el riesgo es negativo (inválido para R:R normal)
+        // Pero lo mostramos igual para que el usuario vea el error visualmente
+        riskAmount = riskPerContract * size * currentMultiplier;
+        
+        // R:R = Reward / Risk
+        // Reward per contract = diff
+        // Risk per contract = riskPerContract
+        if (riskPerContract > 0) {
+            rrRatio = Math.abs(diff) / riskPerContract;
+        }
+    }
 
     return {
       grossProfit,
@@ -163,23 +186,34 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
       profit: netProfit,
       points: Math.abs(exit - entry),
       isWin: netProfit >= 0,
-      goalImpact
+      goalImpact,
+      riskAmount,
+      rrRatio
     };
   }, [formData, currentMultiplier, currentCommission, goal, isReal]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
-    if (files && files.length > 0) {
-      Array.from(files).forEach((file) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (reader.result) {
-            setScreenshots(prev => [...prev, reader.result as string]);
-          }
-        };
-        reader.readAsDataURL(file as Blob);
-      });
+    if (!files || files.length === 0) return;
+    
+    const newImages: string[] = [];
+    
+    for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        try {
+            const base64 = await new Promise<string>((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result as string);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+            newImages.push(base64);
+        } catch (err) {
+            console.error("Error leyendo imagen", err);
+        }
     }
+    
+    setScreenshots(prev => [...prev, ...newImages]);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -190,13 +224,13 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!liveEstimate || dateError) return;
-    if (!activeAccountId) return; // seguridad
 
     const entry = Math.round(parseFloat(formData.entryPrice) * 100) / 100;
+    const sl = formData.stopLoss ? Math.round(parseFloat(formData.stopLoss) * 100) / 100 : undefined;
     const exit = Math.round(parseFloat(formData.exitPrice) * 100) / 100;
     const size = parseFloat(formData.size);
     const assetKey = formData.asset.toUpperCase();
-
+    
     const profit = liveEstimate.profit;
     const status = profit > 0 ? TradeStatus.WIN : profit < 0 ? TradeStatus.LOSS : TradeStatus.BREAK_EVEN;
 
@@ -209,16 +243,14 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
       session: formData.session,
       rating: formData.rating,
       entryPrice: entry,
+      stopLoss: sl,
       exitPrice: exit,
       size: size,
       profit: profit,
       status: status,
       notes: formData.notes,
       emotions: formData.emotions,
-      screenshots: screenshots,
-
-      // ✅ CLAVE: asignar al account correcto
-      accountId: activeAccountId,
+      screenshots: screenshots
     };
 
     onAdd(newTrade);
@@ -235,6 +267,7 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
       session: TradeSession.NY,
       rating: 3,
       entryPrice: '',
+      stopLoss: '',
       exitPrice: '',
       size: '',
       notes: '',
@@ -285,7 +318,7 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
 
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 md:p-8 shadow-xl relative overflow-hidden">
         <div className={`absolute top-0 right-0 p-4 pointer-events-none opacity-5`}>
-          {isReal ? <Coins className="w-32 h-32" /> : <TestTube className="w-32 h-32" />}
+            {isReal ? <Coins className="w-32 h-32" /> : <TestTube className="w-32 h-32" />}
         </div>
 
         <div className="flex justify-between items-center mb-6 relative z-10">
@@ -311,6 +344,7 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
 
         <form onSubmit={handleSubmit} className="grid grid-cols-1 lg:grid-cols-2 gap-8 relative z-10">
           <div className="space-y-5">
+            {/* Sesión de Mercado */}
             <div>
               <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-2 flex items-center gap-1">
                 <Globe className="w-3.5 h-3.5" /> Sesión de Mercado
@@ -324,11 +358,12 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
                   <button
                     key={s.id}
                     type="button"
-                    onClick={() => setFormData({ ...formData, session: s.id })}
-                    className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${formData.session === s.id
-                      ? `${s.color} text-white border-transparent shadow-lg scale-105`
-                      : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500'
-                      }`}
+                    onClick={() => setFormData({...formData, session: s.id})}
+                    className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${
+                      formData.session === s.id 
+                        ? `${s.color} text-white border-transparent shadow-lg scale-105` 
+                        : 'bg-slate-50 dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-500'
+                    }`}
                   >
                     {s.label}
                   </button>
@@ -336,41 +371,42 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
               </div>
             </div>
 
+            {/* Fechas */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <DateTimeInput
+              <DateTimeInput 
                 label="Entrada"
                 value={formData.date}
-                onChange={(newVal) => setFormData({ ...formData, date: newVal })}
+                onChange={(newVal) => setFormData({...formData, date: newVal})}
                 hasError={!!dateError}
                 type="entry"
               />
-              <DateTimeInput
+              <DateTimeInput 
                 label="Salida"
                 value={formData.exitDate}
-                onChange={(newVal) => setFormData({ ...formData, exitDate: newVal })}
+                onChange={(newVal) => setFormData({...formData, exitDate: newVal})}
                 hasError={!!dateError}
                 type="exit"
               />
             </div>
-
+            
             {dateError && (
               <div className="flex items-center gap-2 text-rose-500 dark:text-rose-400 text-xs font-bold bg-rose-500/10 p-2 rounded-lg border border-rose-500/20">
                 <AlertTriangle className="w-3 h-3" />
                 {dateError}
               </div>
             )}
-
+            
             <div className="grid grid-cols-2 gap-4">
               <div className="relative" ref={suggestionRef}>
                 <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Activo</label>
-                <input
+                <input 
                   required
-                  type="text"
-                  placeholder="e.g. /ES"
+                  type="text" 
+                  placeholder="e.g. /ES" 
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm uppercase"
                   value={formData.asset}
                   onFocus={() => setShowSuggestions(true)}
-                  onChange={e => setFormData({ ...formData, asset: e.target.value.toUpperCase() })}
+                  onChange={e => setFormData({...formData, asset: e.target.value.toUpperCase()})}
                   autoComplete="off"
                 />
                 {showSuggestions && (
@@ -380,7 +416,7 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
                         key={asset}
                         type="button"
                         className="w-full text-left px-4 py-3 text-sm text-slate-600 dark:text-slate-300 hover:bg-emerald-500/10 hover:text-emerald-500 dark:hover:text-emerald-400 transition-colors"
-                        onClick={() => { setFormData({ ...formData, asset }); setShowSuggestions(false); }}
+                        onClick={() => { setFormData({...formData, asset}); setShowSuggestions(false); }}
                       >
                         <span className="font-bold">{asset}</span>
                       </button>
@@ -390,42 +426,56 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Contratos</label>
-                <input
+                <input 
                   required
-                  type="number"
+                  type="number" 
                   step="any"
                   min="0"
-                  placeholder="1"
+                  placeholder="1" 
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
                   value={formData.size}
-                  onChange={e => setFormData({ ...formData, size: e.target.value })}
+                  onChange={e => setFormData({...formData, size: e.target.value})}
                 />
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            {/* PRECIOS GRID: Entrada, SL, Salida */}
+            <div className="grid grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Entrada</label>
-                <input
+                <input 
                   required
-                  type="number"
+                  type="number" 
                   step="0.01"
-                  placeholder="0.00"
-                  className={`w-full bg-slate-50 dark:bg-slate-800 border ${priceWarning ? 'border-amber-400 dark:border-amber-500/50' : 'border-slate-200 dark:border-slate-700'} rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm`}
+                  placeholder="0.00" 
+                  className={`w-full bg-slate-50 dark:bg-slate-800 border ${priceWarning ? 'border-amber-400 dark:border-amber-500/50' : 'border-slate-200 dark:border-slate-700'} rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm`}
                   value={formData.entryPrice}
-                  onChange={e => setFormData({ ...formData, entryPrice: e.target.value })}
+                  onChange={e => setFormData({...formData, entryPrice: e.target.value})}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1 flex items-center gap-1">
+                   Stop Loss
+                </label>
+                <input 
+                  type="number" 
+                  step="0.01"
+                  placeholder="0.00" 
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-rose-200 dark:border-rose-900/50 rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm"
+                  value={formData.stopLoss}
+                  onChange={e => setFormData({...formData, stopLoss: e.target.value})}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Salida</label>
-                <input
+                <input 
                   required
-                  type="number"
+                  type="number" 
                   step="0.01"
-                  placeholder="0.00"
-                  className={`w-full bg-slate-50 dark:bg-slate-800 border ${priceWarning ? 'border-amber-400 dark:border-amber-500/50' : 'border-slate-200 dark:border-slate-700'} rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm`}
+                  placeholder="0.00" 
+                  className={`w-full bg-slate-50 dark:bg-slate-800 border ${priceWarning ? 'border-amber-400 dark:border-amber-500/50' : 'border-slate-200 dark:border-slate-700'} rounded-lg px-3 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm`}
                   value={formData.exitPrice}
-                  onChange={e => setFormData({ ...formData, exitPrice: e.target.value })}
+                  onChange={e => setFormData({...formData, exitPrice: e.target.value})}
                 />
               </div>
             </div>
@@ -435,21 +485,21 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Dirección</label>
-                <select
+                <select 
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 text-sm"
                   value={formData.direction}
-                  onChange={e => setFormData({ ...formData, direction: e.target.value as TradeDirection })}
+                  onChange={e => setFormData({...formData, direction: e.target.value as TradeDirection})}
                 >
-                  <option value={TradeDirection.LONG}>Long</option>
-                  <option value={TradeDirection.SHORT}>Short</option>
+                  <option value={TradeDirection.LONG}>Long (Compra)</option>
+                  <option value={TradeDirection.SHORT}>Short (Venta)</option>
                 </select>
               </div>
               <div>
                 <label className="flex items-center gap-2 text-sm font-medium text-slate-500 dark:text-slate-400 mb-1">Psicología</label>
-                <select
+                <select 
                   className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 transition-all text-sm"
                   value={formData.emotions}
-                  onChange={e => setFormData({ ...formData, emotions: e.target.value })}
+                  onChange={e => setFormData({...formData, emotions: e.target.value})}
                 >
                   <option>Calmado</option>
                   <option>Ansioso</option>
@@ -465,9 +515,9 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
               <label className="block text-sm font-medium text-slate-500 dark:text-slate-400 mb-1 flex items-center gap-2">
                 <ImageIcon className="w-4 h-4 text-blue-400" /> Capturas (Entrada/Gestión/Salida)
               </label>
-
+              
               <div className="space-y-3">
-                <div
+                <div 
                   onClick={() => fileInputRef.current?.click()}
                   className="border-2 border-dashed border-slate-300 dark:border-slate-800 hover:border-emerald-500/50 hover:bg-emerald-500/5 rounded-xl p-4 transition-all cursor-pointer flex flex-col items-center justify-center gap-1 text-slate-500"
                 >
@@ -481,16 +531,16 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
                     {screenshots.map((shot, index) => (
                       <div key={index} className="relative group rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 aspect-square">
                         <img src={shot} alt={`Preview ${index}`} className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity" />
-                        <button
-                          type="button"
-                          onClick={() => removeScreenshot(index)}
+                        <button 
+                          type="button" 
+                          onClick={() => removeScreenshot(index)} 
                           className="absolute top-1 right-1 p-1 bg-rose-500 text-white rounded-md shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
                         >
                           <X className="w-3 h-3" />
                         </button>
                       </div>
                     ))}
-                    <button
+                    <button 
                       type="button"
                       onClick={() => fileInputRef.current?.click()}
                       className="flex items-center justify-center border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/50 rounded-lg aspect-square text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-500 transition-all"
@@ -503,16 +553,16 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
             </div>
 
             <div>
-              <textarea
+              <textarea 
                 rows={3}
-                placeholder="Notas del trade..."
+                placeholder="Notas del trade..." 
                 className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none text-sm"
                 value={formData.notes}
-                onChange={e => setFormData({ ...formData, notes: e.target.value })}
+                onChange={e => setFormData({...formData, notes: e.target.value})}
               ></textarea>
             </div>
 
-            <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700/50">
+             <div className="flex items-center justify-between bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl border border-slate-200 dark:border-slate-700/50">
               <div className="flex flex-col">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Calidad de Ejecución</label>
                 <span className={`text-xs font-bold ${getRatingLabel(formData.rating).color}`}>
@@ -527,48 +577,77 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
                     onClick={() => setFormData({ ...formData, rating: star })}
                     className="focus:outline-none transition-transform hover:scale-110 active:scale-95 p-1"
                   >
-                    <Star
-                      className={`w-6 h-6 transition-all ${formData.rating >= star
-                        ? getRatingColor(formData.rating)
-                        : 'text-slate-200 dark:text-slate-700'
-                        }`}
+                    <Star 
+                      className={`w-6 h-6 transition-all ${
+                        formData.rating >= star 
+                          ? getRatingColor(formData.rating)
+                          : 'text-slate-200 dark:text-slate-700'
+                      }`} 
                     />
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className={`p-4 rounded-xl border ${liveEstimate ? (liveEstimate.isWin ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-rose-500/5 border-rose-500/20') : 'bg-slate-100 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700'}`}>
-              <div className="flex justify-between items-center mb-1">
-                <span className="text-[10px] font-bold text-slate-500 uppercase">Estimación Neta</span>
-                <span className={`text-xl font-black ${liveEstimate ? (liveEstimate.isWin ? 'text-emerald-500 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400') : 'text-slate-600'}`}>
-                  {liveEstimate ? `${liveEstimate.profit >= 0 ? '+' : ''}$${liveEstimate.profit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$ 0.00'}
-                </span>
-              </div>
+            {/* Live Metrics Card - Redesigned with Risk */}
+            <div className={`p-4 rounded-xl border transition-colors duration-300 ${liveEstimate ? (liveEstimate.isWin ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-rose-500/5 border-rose-500/20') : 'bg-slate-100 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700'}`}>
+               
+               {/* Profit Display */}
+               <div className="flex justify-between items-center mb-3">
+                 <span className="text-[10px] font-bold text-slate-500 uppercase">Resultado Neto</span>
+                 <span className={`text-xl font-black ${liveEstimate ? (liveEstimate.isWin ? 'text-emerald-500 dark:text-emerald-400' : 'text-rose-500 dark:text-rose-400') : 'text-slate-600'}`}>
+                   {liveEstimate ? `${liveEstimate.profit >= 0 ? '+' : ''}$${liveEstimate.profit.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '$ 0.00'}
+                 </span>
+               </div>
+               
+               {/* Risk & Commissions Breakdown */}
+               {liveEstimate && (
+                 <div className="pt-3 border-t border-slate-200 dark:border-slate-700/50 space-y-2">
+                    {/* Commission Row */}
+                    {liveEstimate.totalCommissions > 0 ? (
+                        <div className="flex justify-between text-[10px] text-slate-400">
+                            <span className="flex items-center gap-1"><Coins className="w-3 h-3" /> Comisiones</span>
+                            <span className="font-mono text-rose-400">-${liveEstimate.totalCommissions.toFixed(2)}</span>
+                        </div>
+                    ) : !isReal && (
+                        <div className="flex justify-between text-[10px] text-slate-400">
+                            <span className="flex items-center gap-1"><TestTube className="w-3 h-3" /> Cuenta Prueba</span>
+                            <span className="font-mono text-slate-400">Sin Comisiones</span>
+                        </div>
+                    )}
+                    
+                    {/* RISK / REWARD ROW */}
+                    {liveEstimate.riskAmount > 0 ? (
+                        <div className="flex justify-between items-center bg-white dark:bg-slate-900/40 p-2 rounded-lg border border-slate-100 dark:border-slate-800">
+                             <div className="flex flex-col">
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                                    <Shield className="w-3 h-3" /> Riesgo
+                                </span>
+                                <span className="text-xs font-bold text-rose-500">-${liveEstimate.riskAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                             </div>
 
-              {liveEstimate && (
-                <div className="mt-2 pt-2 border-t border-slate-200 dark:border-slate-700/50 flex flex-col gap-1">
-                  <div className="flex justify-between text-[10px] text-slate-400">
-                    <span>Bruto (Gross)</span>
-                    <span className="font-mono">${liveEstimate.grossProfit.toFixed(2)}</span>
-                  </div>
-                  {liveEstimate.totalCommissions > 0 ? (
-                    <div className="flex justify-between text-[10px] text-slate-400">
-                      <span className="flex items-center gap-1"><Coins className="w-3 h-3" /> Comisiones</span>
-                      <span className="font-mono text-rose-400">-${liveEstimate.totalCommissions.toFixed(2)}</span>
-                    </div>
-                  ) : !isReal && (
-                    <div className="flex justify-between text-[10px] text-slate-400">
-                      <span className="flex items-center gap-1"><TestTube className="w-3 h-3" /> Cuenta Prueba</span>
-                      <span className="font-mono text-slate-400">Sin Comisiones</span>
-                    </div>
-                  )}
-                </div>
-              )}
+                             <div className="h-6 w-px bg-slate-200 dark:bg-slate-700 mx-2"></div>
+                             
+                             <div className="flex flex-col items-end">
+                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                                    <Target className="w-3 h-3" /> R:R Realizado
+                                </span>
+                                <span className={`text-xs font-bold ${liveEstimate.rrRatio >= 2 ? 'text-emerald-500' : liveEstimate.rrRatio >= 1 ? 'text-blue-500' : 'text-orange-500'}`}>
+                                    1 : {liveEstimate.rrRatio.toFixed(1)}
+                                </span>
+                             </div>
+                        </div>
+                    ) : (
+                        <div className="flex items-center gap-2 text-[10px] text-amber-500 italic">
+                            <AlertTriangle className="w-3 h-3" /> Define Stop Loss para ver R:R
+                        </div>
+                    )}
+                 </div>
+               )}
             </div>
 
             <div className="flex gap-4 pt-2">
-              <button
+              <button 
                 type="submit"
                 disabled={!liveEstimate || !!dateError}
                 className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-50"
@@ -584,69 +663,78 @@ const TradeForm: React.FC<Props> = ({ onAdd, goal, trades, isReal = false, activ
 };
 
 const DateTimeInput = ({ label, value, onChange, hasError, type }: { label: string, value: string, onChange: (val: string) => void, hasError?: boolean, type: 'entry' | 'exit' }) => {
+  // Parsing ISO string "YYYY-MM-DDTHH:mm"
   const datePart = value.split('T')[0] || '';
   const timePart = value.split('T')[1]?.slice(0, 5) || '00:00';
 
   const dateObj = new Date(value);
   const isValid = !isNaN(dateObj.getTime());
-
-  const displayDate = isValid
-    ? dateObj.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' })
+  
+  const displayDate = isValid 
+    ? dateObj.toLocaleDateString('es-ES', { weekday: 'short', day: 'numeric', month: 'short' }) 
     : '-';
-
+  
   const displayTime = isValid
     ? dateObj.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
     : '--:--';
 
   const isEntry = type === 'entry';
 
+  // Handler for Date Input Change
   const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newDate = e.target.value;
+    const newDate = e.target.value; // YYYY-MM-DD
     if (!newDate) return;
     onChange(`${newDate}T${timePart}`);
   };
 
+  // Handler for Time Input Change
   const handleTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newTime = e.target.value;
+    const newTime = e.target.value; // HH:mm
     if (!newTime) return;
     onChange(`${datePart}T${newTime}`);
   };
 
   return (
     <div className={`bg-slate-50 dark:bg-slate-800 border ${hasError ? 'border-rose-500 ring-1 ring-rose-500' : 'border-slate-200 dark:border-slate-700'} rounded-xl p-3 relative`}>
-      <div className="flex justify-between items-center mb-3">
-        <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${isEntry ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]'}`}></div>
-          {label}
-        </label>
-      </div>
-      <div className="flex items-center gap-3">
-        <div className="relative flex-1 group">
-          <div className="flex items-center gap-2 bg-white dark:bg-slate-950/50 rounded-lg px-3 py-2 border border-slate-200 dark:border-slate-700/80 group-hover:border-emerald-500/50 transition-colors pointer-events-none">
-            <Calendar className={`w-4 h-4 ${isEntry ? 'text-emerald-500' : 'text-rose-500'}`} />
-            <span className="text-sm font-bold text-slate-700 dark:text-slate-200 capitalize truncate">{displayDate}</span>
-          </div>
-          <input
-            type="date"
-            value={datePart}
-            onChange={handleDateChange}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-          />
+        <div className="flex justify-between items-center mb-3">
+             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                 <div className={`w-2 h-2 rounded-full ${isEntry ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)]' : 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]'}`}></div>
+                 {label}
+             </label>
         </div>
+        <div className="flex items-center gap-3">
+             {/* Date Section */}
+             <div className="relative flex-1 group">
+                 {/* Visuals - Pointer events none allows clicks to pass through to the input below if needed, but since input is absolute on top, it catches everything */}
+                 <div className="flex items-center gap-2 bg-white dark:bg-slate-950/50 rounded-lg px-3 py-2 border border-slate-200 dark:border-slate-700/80 group-hover:border-emerald-500/50 transition-colors pointer-events-none">
+                     <Calendar className={`w-4 h-4 ${isEntry ? 'text-emerald-500' : 'text-rose-500'}`} />
+                     <span className="text-sm font-bold text-slate-700 dark:text-slate-200 capitalize truncate">{displayDate}</span>
+                 </div>
+                 {/* Input Overlay: Covers the entire visual div, works 100% of the time */}
+                 <input 
+                    type="date" 
+                    value={datePart} 
+                    onChange={handleDateChange} 
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                 />
+             </div>
 
-        <div className="relative group min-w-[90px]">
-          <div className="flex items-center gap-2 bg-white dark:bg-slate-950/50 rounded-lg px-3 py-2 border border-slate-200 dark:border-slate-700/80 group-hover:border-blue-500/50 transition-colors pointer-events-none justify-center">
-            <Clock className="w-4 h-4 text-blue-500" />
-            <span className="text-sm font-mono font-bold text-slate-700 dark:text-slate-200">{displayTime}</span>
-          </div>
-          <input
-            type="time"
-            value={timePart}
-            onChange={handleTimeChange}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-          />
+             {/* Time Section */}
+             <div className="relative group min-w-[90px]">
+                 {/* Visuals */}
+                 <div className="flex items-center gap-2 bg-white dark:bg-slate-950/50 rounded-lg px-3 py-2 border border-slate-200 dark:border-slate-700/80 group-hover:border-blue-500/50 transition-colors pointer-events-none justify-center">
+                     <Clock className="w-4 h-4 text-blue-500" />
+                     <span className="text-sm font-mono font-bold text-slate-700 dark:text-slate-200">{displayTime}</span>
+                 </div>
+                 {/* Input Overlay: Covers the entire visual div */}
+                 <input 
+                    type="time" 
+                    value={timePart} 
+                    onChange={handleTimeChange} 
+                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                 />
+             </div>
         </div>
-      </div>
     </div>
   );
 };

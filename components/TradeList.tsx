@@ -707,7 +707,8 @@ export const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, i
                       </tr>
                     )}
                   </React.Fragment>
-                )})}
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -946,4 +947,7 @@ export const TradeList: React.FC<Props> = ({ trades, onDelete, onUpdate, goal, i
           <img src={fullImage} alt="Setup ampliado" className="max-w-full max-h-full object-contain rounded-lg" />
         </div>
       )}
+      </div>
     </>
+  );
+};
